@@ -2,7 +2,7 @@
   "name": "我的小手机",
   "short_name": "小手机",
   "description": "和 AI 角色聊天的小手机",
-  "start_url": "./myphone.html",
+  "start_url": "./index.html",
   "scope": "./",
   "display": "standalone",
   "orientation": "portrait",
