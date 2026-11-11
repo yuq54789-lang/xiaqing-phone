@@ -135,13 +135,40 @@ button { cursor:pointer; }
 .stk-grid .stk img { width:100%; height:100%; object-fit:cover; }
 .av-pick { display:flex; align-items:center; gap:12px; padding:10px 12px; border-bottom:1px solid var(--line); }
 .av-pick .avatar { width:52px; height:52px; }
+/* 桌面 */
+#s-home { background:radial-gradient(120% 60% at 50% 0%, color-mix(in srgb, var(--accent) 14%, var(--bg)) 0%, var(--bg) 70%); }
+.home { padding:calc(36px + env(safe-area-inset-top)) 20px calc(30px + env(safe-area-inset-bottom)); }
+.home-clock { text-align:center; margin-bottom:22px; }
+.home-clock .big { font-size:64px; font-weight:200; letter-spacing:2px; line-height:1.1; font-variant-numeric:tabular-nums; }
+.home-clock .date { color:var(--sub); font-size:14px; margin-top:4px; }
+#home-widget { margin-bottom:26px; }
+.widget { display:flex; gap:12px; align-items:center; background:var(--card); border:1px solid var(--line); border-radius:20px; padding:14px; box-shadow:var(--shadow); }
+.widget:active { transform:scale(.99); }
+.widget .meta { flex:1; min-width:0; }
+.widget .cap { font-size:11px; color:var(--sub); letter-spacing:.5px; }
+.widget .name { font-weight:600; }
+.widget .last { color:var(--sub); font-size:13px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.app-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:22px 8px; }
+.app { display:flex; flex-direction:column; align-items:center; gap:7px; background:none; border:0; padding:0; }
+.app .tile { width:62px; height:62px; border-radius:18px; display:flex; align-items:center; justify-content:center; color:#fff; box-shadow:0 2px 6px rgba(0,0,0,.14); }
+.app:active .tile { transform:scale(.93); }
+.app .tile svg { width:30px; height:30px; fill:none; stroke:currentColor; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
+.app span { font-size:12px; }
 </style>
 </head>
 <body>
 <div id="app">
 
-  <section class="screen active" id="s-list">
-    <header class="bar"><h1>我的小手机</h1><button class="icon" id="b-newchar" aria-label="新建角色">＋</button><button class="icon" id="b-settings" aria-label="设置">⚙︎</button></header>
+  <section class="screen active" id="s-home">
+    <div class="scroll home">
+      <div class="home-clock"><div class="big" id="home-time"></div><div class="date" id="home-date"></div></div>
+      <div id="home-widget"></div>
+      <div class="app-grid" id="app-grid"></div>
+    </div>
+  </section>
+
+  <section class="screen" id="s-list">
+    <header class="bar"><button class="icon" data-back aria-label="返回">‹</button><h1>聊天</h1><button class="icon" id="b-newchar" aria-label="新建角色">＋</button><button class="icon" id="b-settings" aria-label="设置">⚙︎</button></header>
     <div id="char-list" class="scroll"></div>
     <nav class="tabs">
       <button id="b-import">导入数据</button>
@@ -281,7 +308,7 @@ var DEFAULTS = {
   stream: false, liveDisplay: false,
   secBaseUrl: '', secApiKey: '', secModel: '',
   outputRules: '像真人在手机上聊天一样回复：口语化，简短自然。\n把回复拆成几条短消息，每条消息单独一行（最多 6 条）。\n不要在开头写你的名字，不要写旁白、括号动作或解释，除非角色设定要求这样。\n始终保持角色设定，不要承认自己是 AI。',
-  scanDepth: 5, worldBookMaxChars: 6000, memoryLimit: 20, defaultContext: 30, stickerPromptLimit: 60
+  scanDepth: 5, worldBookMaxChars: 6000, memoryLimit: 20, defaultContext: 30, stickerPromptLimit: 60, apiPresets: [], activePresetId: null
 };
 var settings = Object.assign({}, DEFAULTS);
 async function loadSettings() {
@@ -627,7 +654,7 @@ function textSheet(title, value, buttons, hint) {
 }
 
 /* 页面导航 */
-var nav = ['s-list'];
+var nav = ['s-home'];
 var onShow = {};
 function activate(id) {
   var a = document.querySelector('.screen.active'); if (a) a.classList.remove('active');
@@ -637,6 +664,60 @@ function activate(id) {
 function go(id) { nav.push(id); activate(id); }
 function back() { if (nav.length > 1) nav.pop(); activate(nav[nav.length - 1]); }
 document.addEventListener('click', function (e) { if (e.target.closest && e.target.closest('[data-back]')) back(); });
+
+/* ---------- 桌面 ----------
+ * 想增删图标、改顺序或颜色，只改下面这个 APPS 数组就行：
+ * name=名字，color=图标底色，icon=SVG 路径，tap=点击后做什么 */
+var APPS = [
+  { name: '聊天', color: '#c4572a', icon: 'M4 5h16a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H10l-4 3v-3H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1z',
+    tap: function () { go('s-list'); } },
+  { name: '记忆', color: '#4f7c6a', icon: 'M6 3h12a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H6zM9 3v18M12 8h4M12 12h4',
+    tap: function () { pickCharThen('选择角色', function (c) { cur = c; go('s-memory'); }); } },
+  { name: '世界书', color: '#c08a2e', icon: 'M12 6c-2-1.5-5-2-8-1.5v13c3-.5 6 0 8 1.5 2-1.5 5-2 8-1.5v-13C17 4 14 4.5 12 6zM12 6v13',
+    tap: function () { go('s-wblist'); } },
+  { name: '表情包', color: '#8a5a8f', icon: 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM8.5 14c1 1.5 2.2 2 3.5 2s2.5-.5 3.5-2M9 9.5h.01M15 9.5h.01',
+    tap: function () { openStickerPanel('all', true); } },
+  { name: 'API设置', color: '#3d5a80', icon: 'M4 7h9M17 7h3M4 17h3M11 17h9M13 4v6M7 14v6',
+    tap: function () { go('s-settings'); } },
+  { name: '数据备份', color: '#6b6b6b', icon: 'M4 7h16v4H4zM6 11v8h12v-8M10 15h4',
+    tap: function () { menuSheet('数据备份', [['导入数据', function () { $('b-import').click(); }], ['导出数据', function () { $('b-export').click(); }]]); } }
+];
+function pickCharThen(title, fn) {
+  if (!chars.length) { toast('还没有角色，先去聊天里新建一个'); return; }
+  menuSheet(title, chars.map(function (c) { return [c.name, function () { fn(c); }]; }));
+}
+var SVGNS = 'http://www.w3.org/2000/svg';
+function appIcon(d) {
+  var svg = document.createElementNS(SVGNS, 'svg'); svg.setAttribute('viewBox', '0 0 24 24');
+  var p = document.createElementNS(SVGNS, 'path'); p.setAttribute('d', d); svg.appendChild(p); return svg;
+}
+function renderClock() {
+  var n = new Date();
+  $('home-time').textContent = n.toTimeString().slice(0, 5);
+  $('home-date').textContent = n.toLocaleDateString('zh-CN', { month: 'long', day: 'numeric', weekday: 'long' });
+}
+async function renderHome() {
+  renderClock();
+  var grid = $('app-grid'); grid.innerHTML = '';
+  APPS.forEach(function (a) {
+    grid.appendChild(h('button', { class: 'app', onclick: a.tap },
+      h('div', { class: 'tile', style: 'background:' + a.color }, appIcon(a.icon)), h('span', { text: a.name })));
+  });
+  chars = await dbAll('characters');
+  var w = $('home-widget'); w.innerHTML = '';
+  var best = null;
+  for (var i = 0; i < chars.length; i++) {
+    var last = (await pageMessages(chars[i].id, null, 8)).filter(function (m) { return !m.hidden && m.type !== 'system'; }).pop();
+    if (last && (!best || last.ts > best.last.ts)) best = { c: chars[i], last: last };
+  }
+  if (!best) { w.appendChild(h('div', { class: 'widget', onclick: function () { go('s-list'); } }, h('div', { class: 'meta' }, h('div', { class: 'cap', text: '开始使用' }), h('div', { class: 'name', text: '还没有聊天' }), h('div', { class: 'last', text: '点这里去新建角色，或导入你的数据' })))); return; }
+  w.appendChild(h('div', { class: 'widget', onclick: function () { go('s-list'); openChat(best.c.id); } },
+    avatarNode(best.c.avatar, best.c.name),
+    h('div', { class: 'meta' }, h('div', { class: 'cap', text: '最近聊天 · ' + shortTime(best.last.ts) }), h('div', { class: 'name', text: best.c.name }),
+      h('div', { class: 'last', text: (best.last.role === 'user' ? '我：' : '') + msgToText(best.last).replace(/\n/g, ' ') }))));
+}
+onShow['s-home'] = renderHome;
+setInterval(function () { if ($('s-home').classList.contains('active')) renderClock(); }, 20000);
 
 /* ---------- 角色列表 ---------- */
 var chars = [], cur = null; // cur = 当前聊天的角色
@@ -786,6 +867,7 @@ $('input').addEventListener('keydown', function (e) { if (e.key === 'Enter' && (
 /* 表情包面板 */
 $('b-sticker').onclick = function () { openStickerPanel('all', false); };
 async function openStickerPanel(catId, manage) {
+  var inChat = $('s-chat').classList.contains('active'); if (!inChat) manage = true;
   var stickers = await dbAll('stickers'), cats = await dbAll('stickerCategories');
   var tabs = h('div', { class: 'stk-tabs' }), grid = h('div', { class: 'stk-grid' });
   function tab(id, name) {
@@ -808,7 +890,7 @@ async function openStickerPanel(catId, manage) {
   openSheet([h('h3', { text: manage ? '管理表情包（点一个删除）' : '发送表情包（' + list.length + '）' }), tabs, grid,
     h('div', { class: 'btn-row' },
       h('button', { class: 'btn', text: '＋ 添加', onclick: function () { addStickerForm(cats, catId); } }),
-      h('button', { class: 'btn', text: manage ? '完成管理' : '管理', onclick: function () { openStickerPanel(catId, !manage); } }),
+      inChat ? h('button', { class: 'btn', text: manage ? '完成管理' : '管理', onclick: function () { openStickerPanel(catId, !manage); } }) : null,
       h('button', { class: 'btn', text: '关闭', onclick: closeSheet }))]);
 }
 function addStickerForm(cats, catId) {
@@ -1077,7 +1159,7 @@ onShow['s-char'] = async function () {
       (await dbByIndex('memories', 'byChar', c.id)).forEach(function (m) { tx.objectStore('memories').delete(m.id); });
       tx.objectStore('characters').delete(c.id);
       await new Promise(function (r) { tx.oncomplete = r; });
-      editing = null; nav = ['s-list']; activate('s-list'); toast('已删除');
+      editing = null; nav = ['s-home', 's-list']; activate('s-list'); toast('已删除');
     }, true);
   } })));
   editing._collect = function () {
@@ -1103,8 +1185,50 @@ $('b-char-save').onclick = async function () {
 };
 
 /* ---------- 设置页 ---------- */
+var PRESET_KEYS = ['baseUrl', 'apiKey', 'model', 'temperature', 'stream', 'liveDisplay', 'secBaseUrl', 'secApiKey', 'secModel'];
+function nameSheet(title, init, cb) {
+  var inp = h('input', { type: 'text', value: init || '', placeholder: '例如：官方直连 / 备用反代', style: 'width:100%;padding:10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);margin-bottom:10px' });
+  openSheet([h('h3', { text: title }), inp, h('div', { class: 'btn-row' },
+    h('button', { class: 'btn primary', text: '保存', onclick: function () { var v = inp.value.trim(); if (!v) { toast('请输入名称'); return; } closeSheet(); cb(v); } }),
+    h('button', { class: 'btn', text: '取消', onclick: closeSheet }))]);
+  setTimeout(function () { inp.focus(); }, 50);
+}
+function presetGroup() {
+  var list = settings.apiPresets || [], active = list.find(function (p) { return p.id === settings.activePresetId; });
+  var sel = h('select', {}, h('option', { value: '', text: '（未使用预设）' }));
+  list.forEach(function (p) { sel.appendChild(h('option', { value: p.id, text: p.name })); });
+  sel.value = active ? active.id : '';
+  sel.onchange = async function () {
+    var p = list.find(function (x) { return x.id === sel.value; });
+    settings.activePresetId = p ? p.id : null;
+    if (p) PRESET_KEYS.forEach(function (k) { settings[k] = p[k] !== undefined ? p[k] : DEFAULTS[k]; });
+    await saveSettings(); buildSettings(); toast(p ? '已切换到「' + p.name + '」' : '已取消预设');
+  };
+  function snapshot() { var o = {}; PRESET_KEYS.forEach(function (k) { o[k] = settings[k]; }); return o; }
+  var row = h('div', { class: 'btn-row', style: 'margin:8px 0 14px' },
+    h('button', { class: 'btn', text: '另存为新预设', onclick: function () {
+      nameSheet('预设名称', '', async function (name) {
+        var p = Object.assign({ id: uid('api'), name: name }, snapshot());
+        settings.apiPresets = list.concat([p]); settings.activePresetId = p.id; await saveSettings(); buildSettings(); toast('已保存预设');
+      });
+    } }),
+    active ? h('button', { class: 'btn', text: '更新「' + active.name + '」', onclick: async function () {
+      Object.assign(active, snapshot()); await saveSettings(); toast('已更新「' + active.name + '」');
+    } }) : null,
+    active ? h('button', { class: 'btn', text: '重命名', onclick: function () {
+      nameSheet('重命名', active.name, async function (name) { active.name = name; await saveSettings(); buildSettings(); });
+    } }) : null,
+    active ? h('button', { class: 'btn danger', text: '删除', onclick: function () {
+      confirmSheet('删除预设「' + active.name + '」？当前填写的内容不会被清空。', '删除', async function () {
+        settings.apiPresets = list.filter(function (p) { return p.id !== active.id; }); settings.activePresetId = null; await saveSettings(); buildSettings();
+      }, true);
+    } }) : null);
+  return [h('div', { class: 'group-title', text: '配置预设（一键切换渠道）' }), h('div', { class: 'group' }, field('当前预设', sel,
+    '预设包含：反代地址、Key、模型、温度、流式开关、副 API。修改下面的内容后，要点「更新」才会存进预设。预设和 Key 只存在这台设备上，不会随「导出数据」导出。')), row];
+}
 function buildSettings() {
   var body = $('settings-body'); body.innerHTML = '';
+  presetGroup().forEach(function (n) { body.appendChild(n); });
   function txt(key, label, type, ph, hint) {
     var i = h('input', { type: type || 'text', placeholder: ph || '', value: settings[key] == null ? '' : settings[key] });
     i.addEventListener('change', function () { settings[key] = type === 'number' ? Number(i.value) : i.value.trim(); saveSettings(); });
@@ -1251,7 +1375,7 @@ $('b-export').onclick = async function () {
 /* ---------- 启动 ---------- */
 (async function () {
   try {
-    await openDB(); await loadSettings(); await renderList();
+    await openDB(); await loadSettings(); await renderHome();
     if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)) navigator.serviceWorker.register('sw.js').catch(function () {});
     if (navigator.storage && navigator.storage.persist) navigator.storage.persist();
   } catch (e) { document.body.innerHTML = '<pre style="padding:20px;white-space:pre-wrap">启动失败：' + e.message + '</pre>'; }
