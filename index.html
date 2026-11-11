@@ -127,6 +127,10 @@ button { cursor:pointer; }
 #sheet .menu-btn:last-child { border-bottom:0; }
 #toast { position:fixed; left:50%; bottom:calc(90px + env(safe-area-inset-bottom)); transform:translateX(-50%); background:#222; color:#fff; padding:9px 16px; border-radius:20px; font-size:14px; z-index:99; opacity:0; pointer-events:none; transition:opacity .2s; max-width:86%; text-align:center; }
 #toast.show { opacity:.94; }
+.th-card { border-left:3px solid var(--accent); background:var(--card); border-radius:0 14px 14px 0; padding:14px 16px; margin-bottom:18px; box-shadow:var(--shadow); }
+.th-cap { font-size:12px; color:var(--sub); margin-bottom:6px; }
+.th-voice { font-size:19px; line-height:1.55; font-weight:500; margin-bottom:10px; }
+.th-jot { font-size:14px; line-height:1.8; color:var(--sub); white-space:pre-wrap; }
 .stk-tabs { display:flex; gap:6px; overflow-x:auto; margin-bottom:10px; padding-bottom:2px; }
 .stk-tabs button { flex:none; border:1px solid var(--line); background:var(--bg); border-radius:14px; padding:3px 12px; font-size:13px; }
 .stk-tabs button.on { background:var(--accent); color:var(--accent-ink); border-color:var(--accent); }
@@ -168,14 +172,8 @@ button { cursor:pointer; }
   </section>
 
   <section class="screen" id="s-list">
-    <header class="bar"><button class="icon" data-back aria-label="返回">‹</button><h1>聊天</h1><button class="icon" id="b-newchar" aria-label="新建角色">＋</button><button class="icon" id="b-settings" aria-label="设置">⚙︎</button></header>
+    <header class="bar"><button class="icon" data-back aria-label="返回">‹</button><h1>聊天</h1><button class="icon" id="b-newchar" aria-label="新建角色">＋</button></header>
     <div id="char-list" class="scroll"></div>
-    <nav class="tabs">
-      <button id="b-import">导入数据</button>
-      <button id="b-export">导出数据</button>
-      <button id="b-wb">世界书</button>
-    </nav>
-    <input type="file" id="file-import" accept=".json,application/json" hidden>
   </section>
 
   <section class="screen" id="s-chat">
@@ -213,6 +211,11 @@ button { cursor:pointer; }
     <div class="scroll"><div class="pad" id="mem-body"></div></div>
   </section>
 
+  <section class="screen" id="s-thoughts">
+    <header class="bar"><button class="icon" data-back>‹</button><h2 id="th-title">心声</h2><button class="txt-btn" id="b-th-gen">生成</button></header>
+    <div class="scroll"><div class="pad" id="th-body"></div></div>
+  </section>
+
   <section class="screen" id="s-wblist">
     <header class="bar"><button class="icon" data-back>‹</button><h2>世界书</h2><button class="txt-btn" id="b-wb-add">＋ 新建</button></header>
     <div class="scroll"><div class="pad" id="wblist-body"></div></div>
@@ -223,6 +226,7 @@ button { cursor:pointer; }
     <div class="scroll"><div class="pad" id="wbedit-body"></div></div>
   </section>
 </div>
+<input type="file" id="file-import" accept=".json,application/json" hidden>
 
 <div id="sheet" hidden><div class="panel" id="sheet-panel"></div></div>
 <div id="toast"></div>
@@ -277,6 +281,13 @@ function dbBulkPut(store, arr) {
     tx.oncomplete = res; tx.onerror = function () { rej(tx.error); }; tx.onabort = function () { rej(tx.error); };
   });
 }
+function dbAllWithKeys(store) {
+  return new Promise(function (res, rej) {
+    var out = [], cur = db.transaction(store).objectStore(store).openCursor();
+    cur.onsuccess = function () { var c = cur.result; if (c) { out.push({ key: c.primaryKey, value: c.value }); c.continue(); } else res(out); };
+    cur.onerror = function () { rej(cur.error); };
+  });
+}
 function dbByIndex(store, index, key) { return reqP(db.transaction(store).objectStore(store).index(index).getAll(key)); }
 
 /* 取某角色的一页消息（从新到旧，返回时已按时间正序）。before = {ts,id} 表示取比它更早的 */
@@ -308,7 +319,7 @@ var DEFAULTS = {
   stream: false, liveDisplay: false,
   secBaseUrl: '', secApiKey: '', secModel: '',
   outputRules: '像真人在手机上聊天一样回复：口语化，简短自然。\n把回复拆成几条短消息，每条消息单独一行（最多 6 条）。\n不要在开头写你的名字，不要写旁白、括号动作或解释，除非角色设定要求这样。\n始终保持角色设定，不要承认自己是 AI。',
-  scanDepth: 5, worldBookMaxChars: 6000, memoryLimit: 20, defaultContext: 30, stickerPromptLimit: 60, apiPresets: [], activePresetId: null
+  scanDepth: 5, worldBookMaxChars: 6000, memoryLimit: 20, defaultContext: 30, stickerPromptLimit: 60, autoReply: false, apiPresets: [], activePresetId: null
 };
 var settings = Object.assign({}, DEFAULTS);
 async function loadSettings() {
@@ -374,6 +385,9 @@ function buildSystem(ctx) {
   if (ctx.stickers && ctx.stickers.length) {
     L.push('# 可发送的表情包\n想发表情包时，单独占一行，写成 [表情包：名称]，名称必须从下面选一个，不要自己编：\n' +
       ctx.stickers.map(function (st) { return st.name; }).join('、'));
+  }
+  if (ctx.thought) {
+    L.push('# 你此刻的内心（只有你自己知道，不要直接念出来，但要让言行和它保持一致）\n心声：' + ctx.thought.heartfeltVoice + (ctx.thought.randomJottings ? '\n散记：' + ctx.thought.randomJottings : ''));
   }
   L.push('# 当前时间\n' + fmtTime(ctx.now, c.timeZone));
   if (s.outputRules) L.push('# 回复要求\n' + s.outputRules);
@@ -598,8 +612,29 @@ async function refineMemories(char, mems, targetChars) {
     messages: [{ role: 'user', content: body }], stream: false })).trim();
 }
 
+/* 心声：让角色根据最近的聊天，写下此刻没说出口的想法 */
+function parseThought(text) {
+  var t = String(text || '').replace(/```json|```/g, '').trim();
+  var m = t.match(/\{[\s\S]*\}/);
+  if (!m) throw new Error('模型没有返回 JSON 格式：' + t.slice(0, 120));
+  var o; try { o = JSON.parse(m[0]); } catch (e) { throw new Error('心声解析失败：' + m[0].slice(0, 120)); }
+  var v = String(o.heartfeltVoice || '').trim(), j = String(o.randomJottings || '').trim();
+  if (!v && !j) throw new Error('模型返回的心声是空的');
+  return { heartfeltVoice: v, randomJottings: j };
+}
+async function generateThought(char, msgs) {
+  var system = '你是「' + (char.realName || char.name) + '」。' + (char.persona ? '\n# 角色设定\n' + char.persona + '\n' : '') +
+    '\n请根据下面最近的聊天，用第一人称写下你此刻真实的内心，分两部分：\n' +
+    '1. heartfeltVoice（心声）：一句话，你心里没有说出口的真实想法，不超过 40 字；\n' +
+    '2. randomJottings（散记）：一小段随笔，像日记或碎碎念，记录你此刻的心情或刚发生的小事，不超过 120 字。\n' +
+    '语气必须符合角色设定。只输出 JSON，格式：{"heartfeltVoice":"…","randomJottings":"…"}，不要输出其他任何内容。';
+  var out = await callLLM({ base: settings.baseUrl, key: settings.apiKey, model: settings.model, temperature: 0.9, system: system,
+    messages: [{ role: 'user', content: transcript(msgs, char) }], stream: false });
+  return parseThought(out);
+}
+
 /* 导出给测试用 */
-if (typeof module !== 'undefined') module.exports = { triggeredEntries: triggeredEntries, pickMemories: pickMemories, buildSystem: buildSystem, msgToText: msgToText, toApiMessages: toApiMessages, splitReply: splitReply, openaiUrl: openaiUrl, stickerPool: stickerPool, sampleStickers: sampleStickers, parseReplyLines: parseReplyLines, findSticker: findSticker };
+if (typeof module !== 'undefined') module.exports = { triggeredEntries: triggeredEntries, pickMemories: pickMemories, buildSystem: buildSystem, msgToText: msgToText, toApiMessages: toApiMessages, splitReply: splitReply, parseThought: parseThought, openaiUrl: openaiUrl, stickerPool: stickerPool, sampleStickers: sampleStickers, parseReplyLines: parseReplyLines, findSticker: findSticker };
 
 /* ---------- ⑤ 界面 ---------- */
 var $ = function (id) { return document.getElementById(id); };
@@ -680,7 +715,7 @@ var APPS = [
   { name: 'API设置', color: '#3d5a80', icon: 'M4 7h9M17 7h3M4 17h3M11 17h9M13 4v6M7 14v6',
     tap: function () { go('s-settings'); } },
   { name: '数据备份', color: '#6b6b6b', icon: 'M4 7h16v4H4zM6 11v8h12v-8M10 15h4',
-    tap: function () { menuSheet('数据备份', [['导入数据', function () { $('b-import').click(); }], ['导出数据', function () { $('b-export').click(); }]]); } }
+    tap: function () { menuSheet('数据备份', [['导入数据', startImport], ['导出数据', exportData]]); } }
 ];
 function pickCharThen(title, fn) {
   if (!chars.length) { toast('还没有角色，先去聊天里新建一个'); return; }
@@ -762,11 +797,9 @@ $('b-newchar').onclick = async function () {
   await dbPut('characters', c);
   editChar(c.id);
 };
-$('b-settings').onclick = function () { go('s-settings'); };
-$('b-wb').onclick = function () { go('s-wblist'); };
 
 /* ---------- 聊天 ---------- */
-var PAGE = 60, oldest = null, busy = false, abortCtl = null, lastPrompt = null;
+var PAGE = 60, oldest = null, busy = false, lastPrompt = null;
 
 async function openChat(cid) {
   cur = chars.find(function (c) { return c.id === cid; }) || await dbGet('characters', cid);
@@ -799,7 +832,7 @@ function msgNode(m) {
   }
   b.addEventListener('click', function () { messageMenu(m); });
   var row = h('div', { class: 'row' + (me ? ' me' : ''), 'data-id': m.id });
-  if (!me) row.appendChild(avatarNode(cur.avatar, cur.name));
+  if (!me) { var av0 = avatarNode(cur.avatar, cur.name); av0.style.cursor = 'pointer'; av0.title = '查看心声'; av0.addEventListener('click', function (e) { e.stopPropagation(); openThoughts(cur); }); row.appendChild(av0); }
   else if (cur.userAvatar) row.appendChild(avatarNode(cur.userAvatar, '我'));
   row.appendChild(b);
   return row;
@@ -842,24 +875,23 @@ function messageMenu(m) {
   menuSheet('', items);
 }
 
-function setBusy(v) {
-  busy = v;
-  $('b-send').textContent = v ? '停止' : '发送';
-  $('b-send').classList.toggle('ghost', v);
-  $('b-wait').disabled = v;
+function setBusy(v) { busy = v; $('b-wait').disabled = v; }
+/* 新消息一律插在「对方正在输入」提示的上面，保证提示始终在最底下 */
+function appendMsgNode(node) {
+  var box = $('msgs'), typing = box.querySelector('.row.typing');
+  if (typing) box.insertBefore(node, typing); else box.appendChild(node);
 }
 
 $('input').addEventListener('input', function () { this.style.height = 'auto'; this.style.height = Math.min(this.scrollHeight, 120) + 'px'; });
 $('composer').addEventListener('submit', async function (e) {
   e.preventDefault();
-  if (busy) { if (abortCtl) abortCtl.abort(); return; }
   var v = $('input').value.trim(); if (!v) return;
   $('input').value = ''; $('input').style.height = 'auto';
   var m = { id: uid(cur.id), characterId: cur.id, role: 'user', type: 'text', content: v, ts: Date.now() };
   await dbPut('messages', m);
-  var n = msgNode(m); if (lastShownTs && m.ts - lastShownTs > 600000) $('msgs').appendChild(h('div', { class: 'sysline', text: fmtTime(m.ts).replace(/:\d\d$/, '') }));
-  if (n) $('msgs').appendChild(n); lastShownTs = m.ts; scrollBottom();
-  generateReply();
+  var n = msgNode(m); if (lastShownTs && m.ts - lastShownTs > 600000) appendMsgNode(h('div', { class: 'sysline', text: fmtTime(m.ts).replace(/:\d\d$/, '') }));
+  if (n) appendMsgNode(n); lastShownTs = m.ts; scrollBottom();
+  if (settings.autoReply) generateReply(); // 默认只发送，不回复：要你点「等回复」才会回
 });
 $('b-wait').onclick = function () { generateReply(); };
 $('input').addEventListener('keydown', function (e) { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); $('composer').requestSubmit(); } });
@@ -909,7 +941,7 @@ function addStickerForm(cats, catId) {
 async function sendSticker(st) {
   var m = { id: uid(cur.id), characterId: cur.id, role: 'user', type: 'sticker', content: st.url, ts: Date.now(), meta: { meaning: st.name } };
   await dbPut('messages', m);
-  var n = msgNode(m); if (n) $('msgs').appendChild(n); lastShownTs = m.ts; scrollBottom();
+  var n = msgNode(m); if (n) appendMsgNode(n); lastShownTs = m.ts; scrollBottom();
 }
 
 /* 组装提示词 */
@@ -922,16 +954,21 @@ async function buildPrompt(char) {
   var books = allBooks.filter(function (b) { return (char.worldBookIds || []).indexOf(b.id) !== -1; });
   var entries = triggeredEntries(books, scan, settings.worldBookMaxChars);
   var mems = pickMemories(await dbByIndex('memories', 'byChar', char.id), settings.memoryLimit);
+  var thought = null;
+  if (char.injectThought) {
+    var th = (await dbAllWithKeys('thoughts')).map(function (r) { return r.value; }).filter(function (t) { return t.characterId === char.id; }).sort(function (a, b) { return b.ts - a.ts; })[0];
+    if (th) thought = th;
+  }
   var pool = stickerPool(await dbAll('stickers'), char.stickerCategoryIds);
   var shown = sampleStickers(pool, settings.stickerPromptLimit);
-  var system = buildSystem({ char: char, settings: settings, entries: entries, memories: mems, stickers: shown, now: Date.now() });
+  var system = buildSystem({ char: char, settings: settings, entries: entries, memories: mems, stickers: shown, thought: thought, now: Date.now() });
   return { system: system, messages: apiMsgs, pool: pool, stats: { history: history.length, entries: entries.length, memories: mems.length, stickers: shown.length } };
 }
 
 async function generateReply() {
   if (busy) return;
   var char = cur, box = $('msgs');
-  setBusy(true); abortCtl = new AbortController();
+  setBusy(true);
   var live = h('div', { class: 'bubble' }, h('span', { class: 'dots', text: '对方正在输入' }));
   var typing = h('div', { class: 'row typing' }, avatarNode(char.avatar, char.name), live);
   box.appendChild(typing); scrollBottom();
@@ -941,7 +978,7 @@ async function generateReply() {
     var useLive = settings.stream && settings.liveDisplay;
     var text = await callLLM({
       base: settings.baseUrl, key: settings.apiKey, model: settings.model, temperature: Number(settings.temperature),
-      system: prompt.system, messages: prompt.messages, stream: settings.stream, signal: abortCtl.signal,
+      system: prompt.system, messages: prompt.messages, stream: settings.stream,
       onDelta: useLive ? function (t) { live.textContent = t; scrollBottom(); } : null
     });
     typing.remove();
@@ -953,19 +990,19 @@ async function generateReply() {
     });
     await dbBulkPut('messages', saved);
     if (cur && cur.id === char.id) { saved.forEach(function (m) { var n = msgNode(m); if (n) box.appendChild(n); lastShownTs = m.ts; }); scrollBottom(); }
-    maybeAutoSummarize(char);
+    maybeAutoSummarize(char); maybeAutoThought(char);
   } catch (e) {
     typing.remove();
-    var msg = e && e.name === 'AbortError' ? '已停止' : e.message;
-    errNode = h('div', { class: 'sysline err' }, msg, e && e.name !== 'AbortError' ? h('button', { class: 'btn', text: '重试', onclick: function () { errNode.remove(); generateReply(); } }) : null);
+    errNode = h('div', { class: 'sysline err' }, e.message, h('button', { class: 'btn', text: '重试', onclick: function () { errNode.remove(); generateReply(); } }));
     box.appendChild(errNode); scrollBottom();
-  } finally { setBusy(false); abortCtl = null; }
+  } finally { setBusy(false); }
 }
 
 /* 聊天菜单 */
 $('b-chatmenu').onclick = function () {
   menuSheet(cur.name, [
     ['角色设置', function () { editChar(cur.id); }],
+    ['心声', function () { openThoughts(cur); }],
     ['记忆', function () { go('s-memory'); }],
     ['重新生成上一轮回复', regenerate],
     ['查看提示词（上次发送给模型的内容）', showPrompt],
@@ -994,6 +1031,57 @@ async function showPrompt() {
     pr.messages.map(function (m) { return '[' + m.role + '] ' + m.content; }).join('\n');
   openSheet([h('h3', { text: '提示词（世界书触发 ' + pr.stats.entries + ' 条，记忆 ' + pr.stats.memories + ' 条，表情包 ' + pr.stats.stickers + ' 个）' }), h('pre', { text: txt }),
     h('div', { class: 'btn-row' }, h('button', { class: 'btn', text: '复制', onclick: function () { navigator.clipboard && navigator.clipboard.writeText(txt).then(function () { toast('已复制'); }); } }), h('button', { class: 'btn', text: '关闭', onclick: closeSheet }))]);
+}
+
+/* ---------- 心声页 ---------- */
+var thoughtChar = null;
+function openThoughts(c) { thoughtChar = c; go('s-thoughts'); }
+async function charThoughts(cid) {
+  return (await dbAllWithKeys('thoughts')).filter(function (r) { return r.value.characterId === cid; })
+    .sort(function (a, b) { return b.value.ts - a.value.ts; });
+}
+async function renderThoughts() {
+  var c = thoughtChar; if (!c) return;
+  $('th-title').textContent = c.name + ' · 心声';
+  var rows = await charThoughts(c.id), body = $('th-body'); body.innerHTML = '';
+  if (!rows.length) { body.appendChild(h('div', { class: 'empty', text: '还没有心声。\n点右上角「生成」，让 TA 写下此刻没说出口的想法。' })); body.firstChild.style.whiteSpace = 'pre-line'; return; }
+  var t = rows[0].value;
+  body.appendChild(h('div', { class: 'th-card' }, h('div', { class: 'th-cap', text: '最新 · ' + fmtTime(t.ts).replace(/:\d\d$/, '') }),
+    t.heartfeltVoice ? h('div', { class: 'th-voice', text: '“' + t.heartfeltVoice + '”' }) : null, t.randomJottings ? h('div', { class: 'th-jot', text: t.randomJottings }) : null));
+  if (rows.length > 1) {
+    body.appendChild(h('div', { class: 'group-title', text: '历史记录（' + (rows.length - 1) + '）' }));
+    var g = h('div', { class: 'group' });
+    rows.slice(1).forEach(function (r) {
+      g.appendChild(h('div', { class: 'item', onclick: function () {
+        openSheet([h('h3', { text: fmtTime(r.value.ts).replace(/:\d\d$/, '') }), h('div', { class: 'th-voice', text: '“' + (r.value.heartfeltVoice || '') + '”' }), h('div', { class: 'th-jot', text: r.value.randomJottings || '' }),
+          h('div', { class: 'btn-row', style: 'margin-top:12px' },
+            h('button', { class: 'btn danger', text: '删除', onclick: async function () { closeSheet(); await dbDel('thoughts', r.key); renderThoughts(); } }),
+            h('button', { class: 'btn', text: '关闭', onclick: closeSheet }))]);
+      } }, h('div', { class: 't' }, h('b', { text: fmtTime(r.value.ts).replace(/:\d\d$/, '') })), h('div', { class: 'c', text: r.value.heartfeltVoice || r.value.randomJottings })));
+    });
+    body.appendChild(g);
+  }
+}
+onShow['s-thoughts'] = renderThoughts;
+async function makeThought(char, silent) {
+  var recent = (await pageMessages(char.id, null, 30)).filter(function (m) { return !m.hidden && m.type !== 'system'; });
+  if (recent.length < 2) { if (!silent) toast('聊天太少，先聊几句再生成'); return false; }
+  var t = await generateThought(char, recent);
+  await dbPut('thoughts', { characterId: char.id, heartfeltVoice: t.heartfeltVoice, randomJottings: t.randomJottings, ts: Date.now() });
+  char.lastThoughtTs = recent[recent.length - 1].ts; await dbPut('characters', char);
+  return true;
+}
+$('b-th-gen').onclick = async function () {
+  toast('正在生成心声…');
+  try { if (await makeThought(thoughtChar, false)) { toast('已生成'); renderThoughts(); } }
+  catch (e) { openSheet([h('h3', { text: '生成失败' }), h('pre', { text: e.message }), h('button', { class: 'btn', text: '关闭', onclick: closeSheet })]); }
+};
+async function maybeAutoThought(char) {
+  try {
+    var at = char.autoThought || {};
+    if (!at.enabled) return;
+    if (await countMessagesAfter(char.id, char.lastThoughtTs || 0) >= (at.interval || 30)) { if (await makeThought(char, true)) toast('角色更新了心声'); }
+  } catch (e) { toast('自动更新心声失败：' + e.message.slice(0, 60)); }
 }
 
 /* ---------- 记忆页 ---------- */
@@ -1110,6 +1198,8 @@ onShow['s-char'] = async function () {
   };
   f.userPersona.value = c.userPersona || ''; f.persona.value = c.persona || '';
   var auto = switchEl(c.autoMemory && c.autoMemory.enabled);
+  var thAuto = switchEl(c.autoThought && c.autoThought.enabled), thInject = switchEl(c.injectThought);
+  var thInterval = h('input', { type: 'number', value: (c.autoThought && c.autoThought.interval) || 30 });
   var av = { avatar: c.avatar || null, userAvatar: c.userAvatar || null };
   function avRow(label, key, nm) {
     var row = h('div', { class: 'av-pick' });
@@ -1135,6 +1225,10 @@ onShow['s-char'] = async function () {
   body.appendChild(h('div', { class: 'group-title', text: '上下文与记忆' }));
   body.appendChild(h('div', { class: 'group' }, field('每次带最近多少条消息', f.ctx),
     h('div', { class: 'field inline' }, h('label', { text: '自动总结记忆' }), auto.el), field('每新增多少条消息总结一次', f.interval)));
+  body.appendChild(h('div', { class: 'group-title', text: '心声（点聊天里角色的头像查看）' }));
+  body.appendChild(h('div', { class: 'group' },
+    h('div', { class: 'field inline' }, h('label', { text: '自动更新心声' }), thAuto.el), field('每新增多少条消息更新一次', thInterval),
+    h('div', { class: 'field inline' }, h('div', {}, h('label', { text: '让角色知道自己的心声' }), h('div', { class: 'hint', text: '把最新心声放进提示词，言行会更一致，但会多花一点 token' })), thInject.el)));
   body.appendChild(h('div', { class: 'group-title', text: '挂载世界书' }));
   var wg = h('div', { class: 'group' }), checks = {};
   if (!books.length) wg.appendChild(h('div', { class: 'check', text: '还没有世界书' }));
@@ -1171,6 +1265,8 @@ onShow['s-char'] = async function () {
     var sk = Object.keys(sChecks), on = sk.filter(function (k) { return sChecks[k].checked; });
     c.stickerCategoryIds = on.length === sk.length ? null : on;
     c.avatar = av.avatar; c.userAvatar = av.userAvatar;
+    c.autoThought = { enabled: thAuto.input.checked, interval: Number(thInterval.value) > 0 ? Number(thInterval.value) : 30 };
+    c.injectThought = thInject.input.checked;
     return c;
   };
 };
@@ -1260,7 +1356,8 @@ function buildSettings() {
   body.appendChild(h('div', { class: 'group-title', text: '输出方式' }));
   body.appendChild(h('div', { class: 'group' },
     sw('stream', '流式输出', '长回复不容易被网关超时掐断。回复仍会收完再一起显示。'),
-    sw('liveDisplay', '逐字显示', '需要先开流式。打开后回复会一边生成一边显示。')));
+    sw('liveDisplay', '逐字显示', '需要先开流式。打开后回复会一边生成一边显示。'),
+    sw('autoReply', '发送后自动回复', '关闭时，发送消息后角色不会立刻回，要你点聊天页的「等回复」才会回复。')));
 
   body.appendChild(h('div', { class: 'group-title', text: '副 API（总结、精炼记忆；留空则用主 API）' }));
   body.appendChild(h('div', { class: 'group' },
@@ -1338,7 +1435,7 @@ $('b-wb-save').onclick = async function () {
 
 /* ---------- 导入 / 导出 ---------- */
 var IMPORT_STORES = ['characters', 'messages', 'memories', 'thoughts', 'worldBooks', 'worldBookCategories', 'userPersonas', 'stickers', 'stickerCategories'];
-$('b-import').onclick = function () { $('file-import').click(); };
+function startImport() { $('file-import').click(); }
 $('file-import').addEventListener('change', async function () {
   var f = this.files[0]; this.value = ''; if (!f) return;
   var data;
@@ -1351,7 +1448,8 @@ $('file-import').addEventListener('change', async function () {
       for (var i = 0; i < IMPORT_STORES.length; i++) await dbClear(IMPORT_STORES[i]);
       var lastByChar = {};
       (data.memories || []).forEach(function (m) { if (m.kind !== 'note') lastByChar[m.characterId] = Math.max(lastByChar[m.characterId] || 0, m.ts || 0); });
-      (data.characters || []).forEach(function (c) { c.lastSummaryTs = lastByChar[c.id] || 0; });
+      var lastTh = {}; (data.thoughts || []).forEach(function (t) { lastTh[t.characterId] = Math.max(lastTh[t.characterId] || 0, t.ts || 0); });
+      (data.characters || []).forEach(function (c) { c.lastSummaryTs = lastByChar[c.id] || 0; c.lastThoughtTs = lastTh[c.id] || 0; });
       for (var j = 0; j < IMPORT_STORES.length; j++) await dbBulkPut(IMPORT_STORES[j], data[IMPORT_STORES[j]] || []);
       toast('导入完成：' + (data.characters || []).length + ' 个角色，' + (data.messages || []).length + ' 条消息');
       renderList();
@@ -1360,17 +1458,17 @@ $('file-import').addEventListener('change', async function () {
   if (existing) confirmSheet('导入会覆盖现有的角色、聊天、记忆和世界书（设置不受影响）。继续吗？', '覆盖导入', doImport, true);
   else doImport();
 });
-$('b-export').onclick = async function () {
+async function exportData() {
   toast('正在导出…');
   var out = { format: 'myphone-v1', exportedAt: Date.now(), source: 'myphone' };
   for (var i = 0; i < IMPORT_STORES.length; i++) out[IMPORT_STORES[i]] = await dbAll(IMPORT_STORES[i]);
-  out.characters.forEach(function (c) { delete c.lastSummaryTs; });
+  out.characters.forEach(function (c) { delete c.lastSummaryTs; delete c.lastThoughtTs; });
   var blob = new Blob([JSON.stringify(out)], { type: 'application/json' });
   var a = document.createElement('a'); a.href = URL.createObjectURL(blob);
   a.download = 'myphone-v1-' + new Date().toISOString().slice(0, 10) + '.json';
   document.body.appendChild(a); a.click(); a.remove(); setTimeout(function () { URL.revokeObjectURL(a.href); }, 5000);
   toast('已导出 ' + (blob.size / 1048576).toFixed(1) + 'MB');
-};
+}
 
 /* ---------- 启动 ---------- */
 (async function () {
