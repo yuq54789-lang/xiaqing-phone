@@ -28,44 +28,44 @@
  * ===================================================================== */
 :root {
   /* —— 顶部：时钟 + 日期 + 天气 —— */
-  --home-top:40px;       /* 整个桌面内容离屏幕顶部的距离（越大整体越往下） */
+  --home-top:30px;       /* 整个桌面内容离屏幕顶部的距离（越大整体越往下） */
   --home-side:20px;      /* 桌面内容左右边距 */
-  --clock-size:76px;     /* 大时钟字号 */
+  --clock-size:50px;     /* 大时钟字号 */
   --clock-x:0px;         /* 时钟+日期整体 左右微调 */
-  --clock-y:0px;         /* 时钟+日期整体 上下微调 */
+  --clock-y:-5px;         /* 时钟+日期整体 上下微调 */
   --date-size:15px;      /* 日期/农历/天气 字号 */
-  --clock-gap:14px;      /* 时钟区 与 下面一周胶囊 的间距 */
+  --clock-gap:5px;      /* 时钟区 与 下面一周胶囊 的间距 */
   /* —— 一周日期胶囊 —— */
   --week-x:0px;          /* 胶囊整体 左右微调 */
-  --week-y:0px;          /* 胶囊整体 上下微调 */
-  --week-gap:7px;        /* 每格之间的间距 */
-  --week-radius:14px;    /* 每格圆角 */
+  --week-y:-10px;          /* 胶囊整体 上下微调 */
+  --week-gap:5px;        /* 每格之间的间距 */
+  --week-radius:20px;    /* 每格圆角 */
   --week-num-size:21px;  /* 日期数字字号 */
   --week-bottom:26px;    /* 胶囊 与 下面图标区 的间距 */
   /* —— 图标网格（桌面上的 App 图标） —— */
   --grid-x:0px;          /* 整个图标区 左右微调 */
-  --grid-y:0px;          /* 整个图标区 上下微调 */
+  --grid-y:-5px;          /* 整个图标区 上下微调 */
   --grid-col-gap:8px;    /* 图标左右间距 */
   --grid-row-gap:18px;   /* 图标上下间距 */
-  --icon-size:62px;      /* 图标大小（宽高） */
-  --icon-radius:18px;    /* 图标圆角（改成 50% 就是圆形） */
+  --icon-size:50px;      /* 图标大小（宽高） */
+  --icon-radius:20px;    /* 图标圆角（改成 50% 就是圆形） */
   --icon-glyph-size:30px;/* 没有图片时，矢量小图标的大小 */
-  --icon-label-size:12px;/* 图标下面文字的字号 */
-  --icon-label-gap:7px;  /* 图标 与 文字 的间距 */
-  --icon-shadow:none;    /* 图标阴影。none=无；想要很淡的：0 1px 3px rgba(0,0,0,.08)，最后的小数越小越淡 */
+  --icon-label-size:10px;/* 图标下面文字的字号 */
+  --icon-label-gap:2px;  /* 图标 与 文字 的间距 */
+  --icon-shadow:0 1px 3px rgba(0,0,0,.2);    /* 图标阴影。none=无；想要很淡的：0 1px 3px rgba(0,0,0,.08)，最后的小数越小越淡 */
   /* —— 照片小组件 —— */
   --wdg-cols:2;          /* 组件占几列（共 4 列） */
   --wdg-rows:2;          /* 组件占几行 */
   --wdg-ratio:1/1;       /* 组件宽高比，如 1/1 正方形、2/1 长方形 */
   --wdg-radius:24px;     /* 组件圆角 */
-  --wdg-shadow:0 6px 18px rgba(0,0,0,.18);  /* 组件阴影，改成 none 去掉 */
+  --wdg-shadow:0 10px 28px rgba(0,0,0,.18);  /* 组件阴影，改成 none 去掉 */
   /* —— 底栏 Dock（悬浮那条） —— */
   --dock-left:14px;      /* 距屏幕左边（越大越往右收） */
   --dock-right:14px;     /* 距屏幕右边 */
-  --dock-bottom:14px;    /* 距屏幕底部（越大越往上） */
+  --dock-bottom:35px;    /* 距屏幕底部（越大越往上） */
   --dock-pad:14px 6px 10px;  /* 内边距：上 左右 下，控制底栏高度 */
   --dock-radius:32px;    /* 底栏圆角 */
-  --dock-shadow:0 8px 28px rgba(0,0,0,.16); /* 底栏阴影，改成 none 去掉 */
+  --dock-shadow:0 6px 18px rgba(0,0,0,.2); /* 底栏阴影，改成 none 去掉 */
 }
 * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
 html,body { height:100%; margin:0; }
