@@ -27,8 +27,25 @@ body { background:var(--bg); color:var(--ink); font:15px/1.55 -apple-system,Blin
 button,input,textarea,select { font:inherit; color:inherit; }
 button { cursor:pointer; }
 #app { position:fixed; inset:0; max-width:720px; margin:0 auto; background:var(--bg); overflow:hidden; }
-.screen { position:absolute; inset:0; display:none; flex-direction:column; background:var(--bg); }
-.screen.active { display:flex; }
+.screen { position:absolute; inset:0; display:none; flex-direction:column; background:var(--bg); will-change:transform; }
+.screen.active, .screen.leaving { display:flex; }
+/* 页面切换：前进＝新页从右滑入、旧页微微左移；返回＝当前页向右滑出 */
+.screen.in-fwd { z-index:2; animation:inFwd .3s cubic-bezier(.22,.8,.3,1) both; box-shadow:-10px 0 30px rgba(0,0,0,.12); }
+.screen.out-fwd { z-index:1; animation:outFwd .3s cubic-bezier(.22,.8,.3,1) both; }
+.screen.in-back { z-index:1; animation:inBack .3s cubic-bezier(.22,.8,.3,1) both; }
+.screen.out-back { z-index:2; animation:outBack .3s cubic-bezier(.22,.8,.3,1) both; box-shadow:-10px 0 30px rgba(0,0,0,.12); }
+@keyframes inFwd { from { transform:translateX(100%); } to { transform:none; } }
+@keyframes outFwd { from { transform:none; opacity:1; } to { transform:translateX(-22%); opacity:.55; } }
+@keyframes inBack { from { transform:translateX(-22%); opacity:.55; } to { transform:none; opacity:1; } }
+@keyframes outBack { from { transform:none; } to { transform:translateX(100%); } }
+@media (prefers-reduced-motion: reduce) { .screen { animation:none !important; } }
+.mdl-list { max-height:46vh; overflow:auto; border:1px solid var(--line); border-radius:10px; margin:8px 0; }
+.mdl-list button { display:block; width:100%; text-align:left; border:0; border-bottom:1px solid var(--line); background:none; padding:11px 12px; font-size:14px; word-break:break-all; }
+.mdl-list button:last-child { border-bottom:0; }
+.mdl-list button.on { color:var(--accent); font-weight:600; }
+.mdl-list .empty { padding:16px; text-align:center; color:var(--sub); font-size:13px; }
+.sel-btn { width:100%; text-align:left; display:flex; justify-content:space-between; align-items:center; gap:8px; border:1px solid var(--line); background:var(--bg); border-radius:8px; padding:10px; word-break:break-all; }
+.sel-btn::after { content:"▾"; color:var(--sub); flex:none; }
 .bar { display:flex; align-items:center; gap:8px; padding:calc(10px + env(safe-area-inset-top)) 12px 10px; border-bottom:1px solid var(--line); background:var(--bg); flex:none; }
 .bar h1,.bar h2 { margin:0; font-size:17px; font-weight:600; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .bar h1 { font-size:20px; letter-spacing:.5px; }
@@ -771,9 +788,28 @@ function textSheet(title, value, buttons, hint) {
 /* 页面导航 */
 var nav = ['s-home'];
 var onShow = {};
-function activate(id) {
-  var a = document.querySelector('.screen.active'); if (a) a.classList.remove('active');
-  $(id).classList.add('active');
+var transTimer = null;
+function clearTrans() {
+  if (transTimer) { clearTimeout(transTimer); transTimer = null; }
+  document.querySelectorAll('.screen').forEach(function (el) {
+    el.classList.remove('leaving', 'in-fwd', 'out-fwd', 'in-back', 'out-back');
+    if (!el.classList.contains('active')) el.classList.remove('leaving');
+  });
+}
+function activate(id, isBack) {
+  clearTrans();
+  var prev = document.querySelector('.screen.active'), next = $(id);
+  if (prev === next) { if (onShow[id]) onShow[id](); return; }
+  if (prev) {
+    prev.classList.remove('active');
+    var reduce = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (!reduce) {
+      prev.classList.add('leaving', isBack ? 'out-back' : 'out-fwd');
+      next.classList.add(isBack ? 'in-back' : 'in-fwd');
+      transTimer = setTimeout(clearTrans, 320);
+    }
+  }
+  next.classList.add('active');
   if (onShow[id]) onShow[id]();
 }
 function go(id) { nav.push(id); activate(id); }
@@ -785,7 +821,7 @@ function back(force) {
       h('button', { class: 'btn', text: '继续编辑', onclick: closeSheet }))]);
     return;
   }
-  if (nav.length > 1) nav.pop(); activate(nav[nav.length - 1]);
+  if (nav.length > 1) nav.pop(); activate(nav[nav.length - 1], true);
 }
 document.addEventListener('click', function (e) { if (e.target.closest && e.target.closest('[data-back]')) back(); });
 
@@ -896,10 +932,10 @@ var rounds = {}; /* 每个角色当前这一轮回复的状态 */
 async function openChat(cid) {
   cur = chars.find(function (c) { return c.id === cid; }) || await dbGet('characters', cid);
   refreshTitle(); if (selMode) exitSelect(); setQuote(null); $('input').placeholder = cur.offlineMode ? '写下你的动作或对白…' : '说点什么…';
-  $('msgs').innerHTML = ''; oldest = null;
-  go('s-chat');
   var page = await pageMessages(cid, null, PAGE);
+  $('msgs').innerHTML = ''; oldest = null; lastShownTs = 0;
   renderPage(page, false);
+  go('s-chat');
   scrollBottom();
 }
 function scrollBottom() { var m = $('msgs'); m.scrollTop = m.scrollHeight; }
@@ -1565,6 +1601,29 @@ function presetGroup() {
   return [h('div', { class: 'group-title', text: '配置预设（一键切换渠道）' }), h('div', { class: 'group' }, field('当前预设', sel,
     '预设包含：反代地址、Key、模型、温度、流式开关、副 API。修改下面的内容后，要点「更新」才会存进预设。改完后点右上角「保存」才会生效。')), row];
 }
+function pickModel(mk, bk, kk, done) {
+  var q = h('input', { type: 'text', placeholder: '搜索，或直接输入模型名', style: 'width:100%;padding:10px;border:1px solid var(--line);border-radius:8px;background:var(--bg)' });
+  var list = h('div', { class: 'mdl-list' }), info = h('div', { class: 'hint', style: 'font-size:12px;color:var(--sub)' });
+  function choose(name) { draft[mk] = name; markDirty(); closeSheet(); done(); }
+  function render() {
+    var all = draft.modelList || [], kw = q.value.trim().toLowerCase(); list.innerHTML = '';
+    var shown = all.filter(function (n) { return !kw || n.toLowerCase().indexOf(kw) !== -1; });
+    if (q.value.trim() && all.indexOf(q.value.trim()) === -1) list.appendChild(h('button', { type: 'button', text: '使用「' + q.value.trim() + '」', onclick: function () { choose(q.value.trim()); } }));
+    shown.forEach(function (n) { list.appendChild(h('button', { type: 'button', class: n === draft[mk] ? 'on' : '', text: n, onclick: function () { choose(n); } })); });
+    if (!list.children.length) list.appendChild(h('div', { class: 'empty', text: all.length ? '没有匹配的模型' : '还没有模型列表，点下面「拉取模型列表」' }));
+    info.textContent = all.length ? '共 ' + all.length + ' 个模型' : '';
+  }
+  q.addEventListener('input', render);
+  var pull = h('button', { type: 'button', class: 'btn', text: '拉取模型列表', onclick: async function () {
+    pull.disabled = true; pull.textContent = '拉取中…';
+    try {
+      draft.modelList = await fetchModelList(draft[bk] || draft.baseUrl, draft[kk] || draft.apiKey); markDirty(); render();
+    } catch (e) { list.innerHTML = ''; list.appendChild(h('div', { class: 'empty', style: 'white-space:pre-wrap;word-break:break-all;text-align:left;user-select:text', text: e.message })); }
+    pull.disabled = false; pull.textContent = '拉取模型列表';
+  } });
+  openSheet([h('h3', { text: '选择模型' }), q, list, info, h('div', { class: 'btn-row', style: 'margin-top:8px' }, pull, h('button', { type: 'button', class: 'btn', text: '关闭', onclick: closeSheet }))]);
+  render();
+}
 function buildSettings() {
   function tempField() {
     var v = h('span', { class: 'val', text: Number(draft.temperature).toFixed(1) });
@@ -1585,23 +1644,17 @@ function buildSettings() {
     var row = h('div', { class: 'field inline' }, h('div', {}, h('label', { text: label }), hint ? h('div', { class: 'hint', text: hint }) : null), s.el);
     return row;
   }
-  var dl = h('datalist', { id: 'model-list' });
-  var model = h('input', { type: 'text', list: 'model-list', placeholder: '例如 gpt-4o / gemini-2.5-pro', value: draft.model });
-  model.addEventListener('change', function () { draft.model = model.value.trim(); markDirty(); });
-  var fetchBtn = h('button', { class: 'btn', text: '拉取模型列表', onclick: async function () {
-    try {
-      var list = await fetchModelList(draft.baseUrl, draft.apiKey);
-      dl.innerHTML = ''; list.forEach(function (n) { dl.appendChild(h('option', { value: n })); });
-      toast('拉取到 ' + list.length + ' 个模型，点模型输入框选择');
-    } catch (e) { openSheet([h('h3', { text: '拉取失败' }), h('pre', { text: e.message }), h('button', { class: 'btn', text: '关闭', onclick: closeSheet })]); }
-  } });
-
+  function modelField(label, mk, bk, kk, hint) {
+    var b = h('button', { type: 'button', class: 'sel-btn', onclick: function () { pickModel(mk, bk, kk, function () { buildSettings(); }); } },
+      h('span', { text: draft[mk] || '点击选择模型' }));
+    if (!draft[mk]) b.firstChild.style.color = 'var(--sub)';
+    return field(label, b, hint);
+  }
   body.appendChild(h('div', { class: 'group-title', text: '主 API（对话）' }));
   body.appendChild(h('div', { class: 'group' },
     txt('baseUrl', '反代地址', 'text', 'https://api.openai.com', '填到域名即可，会自动补 /v1/chat/completions；填 Gemini 官方地址会自动用 Gemini 格式'),
     txt('apiKey', 'API Key', 'password', 'sk-...', '只保存在你这台设备的浏览器里'),
-    field('模型', model), dl, tempField()));
-  body.appendChild(h('div', { class: 'btn-row' }, fetchBtn));
+    modelField('模型', 'model', 'baseUrl', 'apiKey', '点一下选择；先在选择窗里「拉取」模型列表，也可以直接手动输入模型名。选好后记得点右上角「保存」。'), tempField()));
 
   body.appendChild(h('div', { class: 'group-title', text: '输出方式' }));
   body.appendChild(h('div', { class: 'group' },
@@ -1610,7 +1663,7 @@ function buildSettings() {
 
   body.appendChild(h('div', { class: 'group-title', text: '副 API（总结、精炼记忆；留空则用主 API）' }));
   body.appendChild(h('div', { class: 'group' },
-    txt('secBaseUrl', '反代地址', 'text', '留空使用主 API'), txt('secApiKey', 'API Key', 'password', '可选'), txt('secModel', '模型', 'text', '建议用便宜的小模型')));
+    txt('secBaseUrl', '反代地址', 'text', '留空使用主 API'), txt('secApiKey', 'API Key', 'password', '可选'), modelField('模型', 'secModel', 'secBaseUrl', 'secApiKey', '建议用便宜的小模型')));
 
   body.appendChild(h('div', { class: 'group-title', text: '上下文' }));
   body.appendChild(h('div', { class: 'group' },
