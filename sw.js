@@ -1,5 +1,5 @@
 // 小手机 Service Worker：网络优先，离线时才用缓存。
-// 这样你更新了 myphone.html，下次打开就是新版，不会卡在旧缓存里。
+// 这样你更新了 index.html，下次打开就是新版，不会卡在旧缓存里。
 const CACHE = 'myphone-v1';
 self.addEventListener('install', e => {
   self.skipWaiting();

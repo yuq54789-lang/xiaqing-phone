@@ -142,6 +142,20 @@ button { cursor:pointer; }
 #fab button:active { transform:scale(.92); }
 #fab svg { width:22px; height:22px; stroke:currentColor; fill:none; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
 @keyframes fabpop { from { opacity:0; transform:translateY(-10px) scale(.5); } to { opacity:1; transform:none; } }
+/* 美化页：悬浮磨砂卡片 */
+#s-beauty { background:linear-gradient(160deg, color-mix(in srgb, var(--accent) 22%, var(--bg)), var(--bg) 55%, color-mix(in srgb, var(--accent) 12%, var(--bg))); }
+.glass { background:color-mix(in srgb, var(--card) 62%, transparent); backdrop-filter:blur(18px) saturate(1.5); -webkit-backdrop-filter:blur(18px) saturate(1.5);
+  border:1px solid color-mix(in srgb, #fff 45%, transparent); border-radius:12px; box-shadow:0 8px 24px rgba(0,0,0,.10); padding:12px; margin-bottom:14px; }
+.glass h4 { margin:0 0 8px; font-size:13px; color:var(--sub); font-weight:500; letter-spacing:.3px; }
+.bt-prev { display:flex; flex-direction:column; gap:8px; }
+.bt-grid { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+.bt-card { border:2px solid transparent; border-radius:10px; padding:8px; background:color-mix(in srgb, var(--card) 70%, transparent); text-align:left; }
+.bt-card.on { border-color:var(--accent); }
+.bt-card .sw { display:flex; gap:4px; margin-bottom:6px; }
+.bt-card .sw i { flex:1; height:22px; border-radius:6px; border:1px solid rgba(0,0,0,.08); }
+.bt-card b { font-size:13px; font-weight:600; }
+#beauty-css { width:100%; min-height:150px; border:1px solid var(--line); border-radius:8px; background:color-mix(in srgb, var(--bg) 70%, transparent); padding:10px; font:12.5px/1.5 ui-monospace,Menlo,Consolas,monospace; resize:vertical; }
+.bt-hint { font-size:12px; color:var(--sub); margin-top:6px; white-space:pre-line; }
 /* 气泡逐条弹出 / 长按选择 / 引用 */
 .row.pop .bubble, .row.pop > .avatar { animation:bpop .26s cubic-bezier(.2,.9,.3,1.25) both; transform-origin:0 100%; }
 .row.me.pop .bubble { transform-origin:100% 100%; }
@@ -236,6 +250,11 @@ button { cursor:pointer; }
       <button type="button" class="pill ghost" id="b-wait">等回复</button>
       <button type="submit" class="pill" id="b-send">发送</button>
     </form>
+  </section>
+
+  <section class="screen" id="s-beauty">
+    <header class="bar"><button class="icon" data-back>‹</button><h2>美化</h2></header>
+    <div class="scroll"><div class="pad" id="beauty-body"></div></div>
   </section>
 
   <div id="errpop" hidden><div class="card" role="alertdialog"><div class="e-icon">!</div><div class="e-title" id="errpop-title"></div><pre class="e-body" id="errpop-body"></pre><div class="e-btns"><button type="button" id="errpop-retry">重试</button><button type="button" id="errpop-copy">复制</button><button type="button" id="errpop-close">好</button></div></div></div>
@@ -369,7 +388,7 @@ function countMessagesAfter(cid, ts) {
 var OUTPUT_RULES = '像真人在手机上聊天一样回复：口语化，简短自然。\n把回复拆成几条短消息，每条消息单独一行（最多 6 条）。\n不要在开头写你的名字，不要写旁白、括号动作或解释，除非角色设定要求这样。\n始终保持角色设定，不要承认自己是 AI。';
 var DEFAULTS = {
   baseUrl: '', apiKey: '', model: '', temperature: 0.8,
-  stream: false,
+  stream: false, themeId: 'default', customCss: '',
   secBaseUrl: '', secApiKey: '', secModel: '',
   scanDepth: 5, worldBookMaxChars: 6000, memoryLimit: 20, defaultContext: 30, stickerPromptLimit: 60, autoReply: false, apiPresets: [], activePresetId: null
 };
@@ -776,6 +795,8 @@ var APPS = [
     tap: function () { go('s-wblist'); } },
   { name: '表情包', color: '#8a5a8f', icon: 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM8.5 14c1 1.5 2.2 2 3.5 2s2.5-.5 3.5-2M9 9.5h.01M15 9.5h.01',
     tap: function () { openStickerPanel('all', true); } },
+  { name: '美化', color: '#b0577a', icon: 'M12 3a9 9 0 1 0 0 18c1.2 0 2-.8 2-1.8 0-1.4-1.3-1.7-1.3-3 0-1 .8-1.7 1.9-1.7H17a4 4 0 0 0 4-4C21 6.6 17 3 12 3zM7.5 11h.01M10 7.5h.01M14.5 7.5h.01',
+    tap: function () { go('s-beauty'); } },
   { name: 'API设置', color: '#3d5a80', icon: 'M4 7h9M17 7h3M4 17h3M11 17h9M13 4v6M7 14v6',
     tap: function () { go('s-settings'); } },
   { name: '数据备份', color: '#6b6b6b', icon: 'M4 7h16v4H4zM6 11v8h12v-8M10 15h4',
@@ -1427,6 +1448,52 @@ $('b-char-save').onclick = async function () {
   if (nav[nav.length - 1] === 's-chat') reloadChat();
 };
 
+/* ---------- 美化 ----------
+ * 想改默认方案：只改下面 THEMES 里的颜色就行。
+ * vars 里的名字 = 页面 CSS 变量（bg 背景 / card 卡片 / ink 文字 / sub 次要文字 / line 分割线 / accent 主色 / me 我的气泡 / them 对方气泡）。
+ * 'default' 是原样（跟随系统深浅色），不要删。 */
+var THEMES = [
+  { id: 'default', name: '默认（暖橙）', vars: null, sw: ['#f6f5f2', '#c4572a', '#f3d9cb'] },
+  { id: 'mist', name: '雾蓝', vars: { bg: '#eef2f6', card: '#ffffff', ink: '#1f2a37', sub: '#6b7a8c', line: '#dbe3ec', accent: '#3d6fb0', 'accent-ink': '#ffffff', me: '#cfe1f5', them: '#ffffff' } },
+  { id: 'night', name: '夜间', vars: { bg: '#101114', card: '#1b1d22', ink: '#e8e9ec', sub: '#8d919a', line: '#2c2f36', accent: '#7c9cff', 'accent-ink': '#0b1020', me: '#2c3a63', them: '#23262d', shadow: 'none' } },
+  { id: 'sakura', name: '樱粉', vars: { bg: '#fbf1f3', card: '#ffffff', ink: '#3a2428', sub: '#9a7b82', line: '#f0dadf', accent: '#d4577a', 'accent-ink': '#ffffff', me: '#f8d4de', them: '#ffffff' } },
+  { id: 'matcha', name: '抹茶', vars: { bg: '#f1f4ec', card: '#fbfcf8', ink: '#25301f', sub: '#7a8570', line: '#dde3d2', accent: '#5b8a4a', 'accent-ink': '#ffffff', me: '#d9e8c8', them: '#ffffff' } }
+];
+THEMES.forEach(function (t) { if (t.vars && !t.sw) t.sw = [t.vars.bg, t.vars.accent, t.vars.me]; });
+function applyTheme() {
+  var st = document.getElementById('theme-style');
+  if (!st) { st = document.createElement('style'); st.id = 'theme-style'; document.head.appendChild(st); }
+  var t = THEMES.find(function (x) { return x.id === settings.themeId; }), css = '';
+  if (t && t.vars) {
+    css += ':root{' + Object.keys(t.vars).map(function (k) { return '--' + k + ':' + t.vars[k] + ';'; }).join('') + '}\n';
+    var m = document.querySelector('meta[name=theme-color]'); if (m) m.setAttribute('content', t.vars.bg);
+  }
+  st.textContent = css + (settings.customCss || '');
+}
+onShow['s-beauty'] = function () {
+  var body = $('beauty-body'); body.innerHTML = '';
+  var prev = h('div', { class: 'glass' }, h('h4', { text: '预览' }), h('div', { class: 'bt-prev' },
+    h('div', { class: 'row' }, avatarNode(null, '她'), h('div', { class: 'bubble', text: '今天有点冷，你出门穿厚点。' })),
+    h('div', { class: 'row me' }, h('div', { class: 'bubble', text: '好～知道啦' })),
+    h('div', { class: 'btn-row' }, h('button', { class: 'btn primary', text: '主按钮' }), h('button', { class: 'btn', text: '次按钮' }))));
+  body.appendChild(prev);
+  var grid = h('div', { class: 'bt-grid' });
+  THEMES.forEach(function (t) {
+    var c = h('button', { type: 'button', class: 'bt-card' + (settings.themeId === t.id ? ' on' : ''), onclick: async function () {
+      settings.themeId = t.id; await saveSettings(); applyTheme(); onShow['s-beauty']();
+    } }, h.apply(null, ['div', { class: 'sw' }].concat(t.sw.map(function (col) { var i = h('i'); i.style.background = col; return i; }))), h('b', { text: t.name }));
+    grid.appendChild(c);
+  });
+  body.appendChild(h('div', { class: 'glass' }, h('h4', { text: '默认方案' }), grid));
+  var ta = h('textarea', { id: 'beauty-css', placeholder: '/* 例：把对方气泡改成半透明、圆角小一点 */\n.row:not(.me) .bubble { background: rgba(255,255,255,.6); border-radius: 8px; }', spellcheck: 'false' });
+  ta.value = settings.customCss || '';
+  body.appendChild(h('div', { class: 'glass' }, h('h4', { text: '自定义美化 CSS' }), ta,
+    h('div', { class: 'btn-row', style: 'margin-top:10px' },
+      h('button', { class: 'btn primary', text: '应用并保存', onclick: async function () { settings.customCss = ta.value; await saveSettings(); applyTheme(); toast('已应用'); } }),
+      h('button', { class: 'btn', text: '清空', onclick: async function () { ta.value = ''; settings.customCss = ''; await saveSettings(); applyTheme(); toast('已清空'); } })),
+    h('div', { class: 'bt-hint', text: '写在这里的 CSS 会盖在上面的方案之上。\n可用变量：--bg --card --ink --sub --line --accent --me --them\n常用选择器：.bubble 气泡、.row.me 我的消息、.bar 顶栏、.app .tile 桌面图标、.glass 磨砂卡片' })));
+};
+
 /* ---------- 设置页 ---------- */
 var draft = null, settingsDirty = false;
 function markDirty() { settingsDirty = true; }
@@ -1607,7 +1674,7 @@ $('file-import').addEventListener('change', async function () {
       var lastTh = {}; (data.thoughts || []).forEach(function (t) { lastTh[t.characterId] = Math.max(lastTh[t.characterId] || 0, t.ts || 0); });
       (data.characters || []).forEach(function (c) { c.lastSummaryTs = lastByChar[c.id] || 0; c.lastThoughtTs = lastTh[c.id] || 0; });
       for (var j = 0; j < IMPORT_STORES.length; j++) await dbBulkPut(IMPORT_STORES[j], data[IMPORT_STORES[j]] || []);
-      if (withSettings && data.settings) { settings = Object.assign({}, DEFAULTS, data.settings); await saveSettings(); }
+      if (withSettings && data.settings) { settings = Object.assign({}, DEFAULTS, data.settings); await saveSettings(); applyTheme(); }
       toast('导入完成：' + (data.characters || []).length + ' 个角色，' + (data.messages || []).length + ' 条消息');
       renderList();
     } catch (e) { toast('导入失败：' + e.message); }
@@ -1647,7 +1714,7 @@ async function doExport(withSettings) {
 /* ---------- 启动 ---------- */
 (async function () {
   try {
-    await openDB(); await loadSettings(); await renderHome();
+    await openDB(); await loadSettings(); applyTheme(); await renderHome();
     if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)) navigator.serviceWorker.register('sw.js').catch(function () {});
     if (navigator.storage && navigator.storage.persist) navigator.storage.persist();
   } catch (e) { document.body.innerHTML = '<pre style="padding:20px;white-space:pre-wrap">启动失败：' + e.message + '</pre>'; }
