@@ -44,13 +44,13 @@
   --week-bottom:26px;    /* 胶囊 与 下面图标区 的间距 */
   /* —— 图标网格（桌面上的 App 图标） —— */
   --grid-x:0px;          /* 整个图标区 左右微调 */
-  --grid-y:-5px;          /* 整个图标区 上下微调 */
-  --grid-col-gap:8px;    /* 图标左右间距 */
+  --grid-y:-8px;          /* 整个图标区 上下微调 */
+  --grid-col-gap:5px;    /* 图标左右间距 */
   --grid-row-gap:18px;   /* 图标上下间距 */
-  --icon-size:50px;      /* 图标大小（宽高） */
+  --icon-size:52px;      /* 图标大小（宽高） */
   --icon-radius:20px;    /* 图标圆角（改成 50% 就是圆形） */
   --icon-glyph-size:30px;/* 没有图片时，矢量小图标的大小 */
-  --icon-label-size:10px;/* 图标下面文字的字号 */
+  --icon-label-size:11px;/* 图标下面文字的字号 */
   --icon-label-gap:2px;  /* 图标 与 文字 的间距 */
   --icon-shadow:0 1px 3px rgba(0,0,0,.2);    /* 图标阴影。none=无；想要很淡的：0 1px 3px rgba(0,0,0,.08)，最后的小数越小越淡 */
   /* —— 照片小组件 —— */
@@ -995,9 +995,9 @@ var APPS = [
     tap: function () { go('s-settings'); } },
   { name: '数据备份', img: 'https://i.imgs.ovh/2026/11/12/fb4761d50fc0237e8566e4ed097f9920.jpg', color: '#6b6b6b', icon: 'M4 7h16v4H4zM6 11v8h12v-8M10 15h4',
     tap: function () { menuSheet('数据备份', [['导入数据', startImport], ['导出数据', exportData]]); } },
-  { name: '网易云音乐', color: '#d43c33', icon: 'M9 18V5l11-2v13M9 18a3 3 0 1 1-6 0 3 3 0 0 1 6 0zM20 16a3 3 0 1 1-6 0 3 3 0 0 1 6 0z',
+  { name: '网易云音乐', img:'https://i.imgs.ovh/2026/11/12/bec70652b9dafca1319ae6c0186d3087.jpg', color: '#d43c33', icon: 'M9 18V5l11-2v13M9 18a3 3 0 1 1-6 0 3 3 0 0 1 6 0zM20 16a3 3 0 1 1-6 0 3 3 0 0 1 6 0z',
     tap: function () { toast('网易云音乐（一起听歌）还在开发中'); } },
-  { name: '看手机', color: '#2f6f8f', icon: 'M8 3h8a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H8a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1zM11 18h2M9.5 11.5C10.5 9.8 11.3 9.3 12 9.3s1.5.5 2.5 2.2c-1 1.7-1.8 2.2-2.5 2.2s-1.5-.5-2.5-2.2z',
+  { name: '看手机', img:'https://i.imgs.ovh/2026/11/12/79c9fc0024948a5505778c43d91a6bfd.jpg', color: '#2f6f8f', icon: 'M8 3h8a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H8a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1zM11 18h2M9.5 11.5C10.5 9.8 11.3 9.3 12 9.3s1.5.5 2.5 2.2c-1 1.7-1.8 2.2-2.5 2.2s-1.5-.5-2.5-2.2z',
     tap: function () { toast('看手机还在开发中'); } }
 ];
 function pickCharThen(title, fn) {
