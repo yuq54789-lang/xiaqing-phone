@@ -88,6 +88,7 @@ button { cursor:pointer; }
 .field:last-child { border-bottom:0; }
 .field.inline { flex-direction:row; align-items:center; justify-content:space-between; }
 .field label { font-size:13px; color:var(--sub); }
+.field label .val, .field .val { float:right; color:var(--ink); font-weight:600; }
 .field.inline label { font-size:15px; color:var(--ink); }
 .field input[type=text],.field input[type=password],.field input[type=number],.field select,.field textarea { width:100%; border:0; background:transparent; outline:none; padding:2px 0; }
 .field textarea { resize:vertical; min-height:90px; line-height:1.5; }
@@ -131,6 +132,23 @@ button { cursor:pointer; }
 .th-cap { font-size:12px; color:var(--sub); margin-bottom:6px; }
 .th-voice { font-size:19px; line-height:1.55; font-weight:500; margin-bottom:10px; }
 .th-jot { font-size:14px; line-height:1.8; color:var(--sub); white-space:pre-wrap; }
+/* 聊天页右上角：悬浮圆形磨砂按钮 */
+#fab { position:absolute; inset:0; z-index:40; }
+#fab[hidden] { display:none; }
+#fab .stack { position:absolute; right:12px; top:calc(56px + env(safe-area-inset-top)); display:flex; flex-direction:column; gap:12px; align-items:center; }
+#fab button { width:46px; height:46px; border-radius:50%; border:1px solid rgba(255,255,255,.55); padding:0; display:flex; align-items:center; justify-content:center; color:var(--ink);
+  background:color-mix(in srgb, var(--card) 52%, transparent); backdrop-filter:blur(14px) saturate(1.5); -webkit-backdrop-filter:blur(14px) saturate(1.5);
+  box-shadow:0 6px 18px rgba(0,0,0,.2); animation:fabpop .24s cubic-bezier(.2,.9,.3,1.2) both; }
+#fab button:active { transform:scale(.92); }
+#fab svg { width:22px; height:22px; stroke:currentColor; fill:none; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
+@keyframes fabpop { from { opacity:0; transform:translateY(-10px) scale(.5); } to { opacity:1; transform:none; } }
+/* 对方正在输入：名字位置闪动 */
+.typing-title { animation:tflash 1.3s ease-in-out infinite; }
+.typing-title i { font-style:normal; display:inline-block; animation:tdot 1.2s infinite both; }
+.typing-title i:nth-child(2) { animation-delay:.2s; } .typing-title i:nth-child(3) { animation-delay:.4s; }
+@keyframes tflash { 0%,100% { opacity:1; } 50% { opacity:.4; } }
+@keyframes tdot { 0%,80%,100% { opacity:.15; } 40% { opacity:1; } }
+.field input[type=range] { width:100%; accent-color:var(--accent); margin:6px 0 2px; }
 .stk-tabs { display:flex; gap:6px; overflow-x:auto; margin-bottom:10px; padding-bottom:2px; }
 .stk-tabs button { flex:none; border:1px solid var(--line); background:var(--bg); border-radius:14px; padding:3px 12px; font-size:13px; }
 .stk-tabs button.on { background:var(--accent); color:var(--accent-ink); border-color:var(--accent); }
@@ -191,8 +209,10 @@ button { cursor:pointer; }
     </form>
   </section>
 
+  <div id="fab" hidden><div class="stack" id="fab-stack"></div></div>
+
   <section class="screen" id="s-settings">
-    <header class="bar"><button class="icon" data-back>‹</button><h2>设置</h2></header>
+    <header class="bar"><button class="icon" data-back>‹</button><h2>设置</h2><button class="txt-btn" id="b-set-save">保存</button></header>
     <div class="scroll"><div class="pad" id="settings-body"></div></div>
   </section>
 
@@ -314,11 +334,12 @@ function countMessagesAfter(cid, ts) {
 }
 
 /* ---------- 设置 ---------- */
+/* 系统提示词里的「回复要求」：内置在代码里，不在界面上显示 */
+var OUTPUT_RULES = '像真人在手机上聊天一样回复：口语化，简短自然。\n把回复拆成几条短消息，每条消息单独一行（最多 6 条）。\n不要在开头写你的名字，不要写旁白、括号动作或解释，除非角色设定要求这样。\n始终保持角色设定，不要承认自己是 AI。';
 var DEFAULTS = {
   baseUrl: '', apiKey: '', model: '', temperature: 0.8,
-  stream: false, liveDisplay: false,
+  stream: false,
   secBaseUrl: '', secApiKey: '', secModel: '',
-  outputRules: '像真人在手机上聊天一样回复：口语化，简短自然。\n把回复拆成几条短消息，每条消息单独一行（最多 6 条）。\n不要在开头写你的名字，不要写旁白、括号动作或解释，除非角色设定要求这样。\n始终保持角色设定，不要承认自己是 AI。',
   scanDepth: 5, worldBookMaxChars: 6000, memoryLimit: 20, defaultContext: 30, stickerPromptLimit: 60, autoReply: false, apiPresets: [], activePresetId: null
 };
 var settings = Object.assign({}, DEFAULTS);
@@ -390,7 +411,7 @@ function buildSystem(ctx) {
     L.push('# 你此刻的内心（只有你自己知道，不要直接念出来，但要让言行和它保持一致）\n心声：' + ctx.thought.heartfeltVoice + (ctx.thought.randomJottings ? '\n散记：' + ctx.thought.randomJottings : ''));
   }
   L.push('# 当前时间\n' + fmtTime(ctx.now, c.timeZone));
-  if (s.outputRules) L.push('# 回复要求\n' + s.outputRules);
+  L.push('# 回复要求\n' + OUTPUT_RULES);
   return L.join('\n\n');
 }
 
@@ -697,7 +718,16 @@ function activate(id) {
   if (onShow[id]) onShow[id]();
 }
 function go(id) { nav.push(id); activate(id); }
-function back() { if (nav.length > 1) nav.pop(); activate(nav[nav.length - 1]); }
+function back(force) {
+  if (!force && nav[nav.length - 1] === 's-settings' && settingsDirty) {
+    openSheet([h('h3', { text: '设置有改动还没保存' }), h('div', { class: 'btn-row' },
+      h('button', { class: 'btn primary', text: '保存并离开', onclick: async function () { closeSheet(); await commitSettings(); back(true); } }),
+      h('button', { class: 'btn danger', text: '不保存', onclick: function () { closeSheet(); settingsDirty = false; back(true); } }),
+      h('button', { class: 'btn', text: '继续编辑', onclick: closeSheet }))]);
+    return;
+  }
+  if (nav.length > 1) nav.pop(); activate(nav[nav.length - 1]);
+}
 document.addEventListener('click', function (e) { if (e.target.closest && e.target.closest('[data-back]')) back(); });
 
 /* ---------- 桌面 ----------
@@ -799,11 +829,12 @@ $('b-newchar').onclick = async function () {
 };
 
 /* ---------- 聊天 ---------- */
-var PAGE = 60, oldest = null, busy = false, lastPrompt = null;
+var PAGE = 60, oldest = null;
+var rounds = {}; /* 每个角色当前这一轮回复的状态 */
 
 async function openChat(cid) {
   cur = chars.find(function (c) { return c.id === cid; }) || await dbGet('characters', cid);
-  $('chat-title').textContent = cur.name;
+  refreshTitle();
   $('msgs').innerHTML = ''; oldest = null;
   go('s-chat');
   var page = await pageMessages(cid, null, PAGE);
@@ -875,12 +906,13 @@ function messageMenu(m) {
   menuSheet('', items);
 }
 
-function setBusy(v) { busy = v; $('b-wait').disabled = v; }
-/* 新消息一律插在「对方正在输入」提示的上面，保证提示始终在最底下 */
-function appendMsgNode(node) {
-  var box = $('msgs'), typing = box.querySelector('.row.typing');
-  if (typing) box.insertBefore(node, typing); else box.appendChild(node);
+function isTyping(cid) { var r = rounds[cid]; return !!(r && r.active); }
+function refreshTitle() {
+  var t = $('chat-title'); if (!cur) return;
+  if (isTyping(cur.id)) { t.className = 'typing-title'; t.innerHTML = '对方正在输入中<i>.</i><i>.</i><i>.</i>'; }
+  else { t.className = ''; t.textContent = cur.name; }
 }
+function appendMsgNode(node) { $('msgs').appendChild(node); }
 
 $('input').addEventListener('input', function () { this.style.height = 'auto'; this.style.height = Math.min(this.scrollHeight, 120) + 'px'; });
 $('composer').addEventListener('submit', async function (e) {
@@ -965,25 +997,25 @@ async function buildPrompt(char) {
   return { system: system, messages: apiMsgs, pool: pool, stats: { history: history.length, entries: entries.length, memories: mems.length, stickers: shown.length } };
 }
 
-async function generateReply() {
-  if (busy) return;
-  var char = cur, box = $('msgs');
-  setBusy(true);
-  var live = h('div', { class: 'bubble' }, h('span', { class: 'dots', text: '对方正在输入' }));
-  var typing = h('div', { class: 'row typing' }, avatarNode(char.avatar, char.name), live);
-  box.appendChild(typing); scrollBottom();
-  var errNode = null;
+/* 点「等回复」= 发一次请求。按钮永远可点：后台慢时可以再点一次，
+ * 同一轮里谁先成功就用谁，后到的结果直接丢掉；全部失败才报错。 */
+async function generateReply(fresh) {
+  var char = cur, box = $('msgs'), r = rounds[char.id];
+  if (fresh || !r || !r.active) {
+    if (r && r.errNode) r.errNode.remove();
+    r = rounds[char.id] = { active: true, total: 0, fails: 0, errNode: null };
+  }
+  r.total++; refreshTitle();
   try {
-    var prompt = await buildPrompt(char); prompt.chatId = char.id; lastPrompt = prompt;
-    var useLive = settings.stream && settings.liveDisplay;
+    var prompt = await buildPrompt(char); prompt.chatId = char.id;
     var text = await callLLM({
       base: settings.baseUrl, key: settings.apiKey, model: settings.model, temperature: Number(settings.temperature),
-      system: prompt.system, messages: prompt.messages, stream: settings.stream,
-      onDelta: useLive ? function (t) { live.textContent = t; scrollBottom(); } : null
+      system: prompt.system, messages: prompt.messages, stream: settings.stream
     });
-    typing.remove();
+    if (!r.active) return;
     var items = parseReplyLines(splitReply(text, 12), prompt.pool), base = Date.now(), saved = [];
     if (!items.length) throw new Error('模型的回复里没有可显示的内容（只有找不到的表情包）。原始回复：' + text.slice(0, 200));
+    r.active = false;
     items.forEach(function (it, i) {
       var m = { id: uid(char.id), characterId: char.id, role: 'assistant', type: it.type, content: it.content, ts: base + i };
       if (it.meta) m.meta = it.meta; saved.push(m);
@@ -992,30 +1024,46 @@ async function generateReply() {
     if (cur && cur.id === char.id) { saved.forEach(function (m) { var n = msgNode(m); if (n) box.appendChild(n); lastShownTs = m.ts; }); scrollBottom(); }
     maybeAutoSummarize(char); maybeAutoThought(char);
   } catch (e) {
-    typing.remove();
-    errNode = h('div', { class: 'sysline err' }, e.message, h('button', { class: 'btn', text: '重试', onclick: function () { errNode.remove(); generateReply(); } }));
-    box.appendChild(errNode); scrollBottom();
-  } finally { setBusy(false); }
+    r.fails++;
+    if (r.active && r.fails >= r.total) {
+      r.active = false;
+      if (cur && cur.id === char.id) {
+        r.errNode = h('div', { class: 'sysline err' }, e.message, h('button', { class: 'btn', text: '重试', onclick: function () { generateReply(true); } }));
+        box.appendChild(r.errNode); scrollBottom();
+      }
+    }
+  } finally { refreshTitle(); }
 }
 
 /* 聊天菜单 */
+var FAB_ITEMS = [
+  ['心声', 'M12 21s-7-4.4-9.3-9A5.3 5.3 0 0 1 12 6.5 5.3 5.3 0 0 1 21.3 12C19 16.6 12 21 12 21z', function () { openThoughts(cur); }],
+  ['记忆', 'M5 4h11a3 3 0 0 1 3 3v13H8a3 3 0 0 1-3-3V4zM8 17h11M9 8h6', function () { go('s-memory'); }],
+  ['角色设置', 'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19 12l2-1.3-2-3.4-2.3.8a7 7 0 0 0-1.7-1L14.6 4h-4l-.4 2.1a7 7 0 0 0-1.7 1l-2.3-.8-2 3.4L6 12l-2 1.3 2 3.4 2.3-.8a7 7 0 0 0 1.7 1l.4 2.1h4l.4-2.1a7 7 0 0 0 1.7-1l2.3.8 2-3.4z', function () { editChar(cur.id); }],
+  ['重新生成上一轮回复', 'M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7', regenerate],
+  ['清空聊天记录', 'M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v6M14 11v6', function () { confirmSheet('清空和「' + cur.name + '」的全部聊天记录？', '清空', clearChat, true); }]
+];
+function closeFab() { $('fab').hidden = true; }
 $('b-chatmenu').onclick = function () {
-  menuSheet(cur.name, [
-    ['角色设置', function () { editChar(cur.id); }],
-    ['心声', function () { openThoughts(cur); }],
-    ['记忆', function () { go('s-memory'); }],
-    ['重新生成上一轮回复', regenerate],
-    ['查看提示词（上次发送给模型的内容）', showPrompt],
-    ['清空聊天记录', function () { confirmSheet('清空和「' + cur.name + '」的全部聊天记录？', '清空', clearChat, true); }]
-  ]);
+  var fab = $('fab'), st = $('fab-stack');
+  if (!fab.hidden) { closeFab(); return; }
+  st.innerHTML = '';
+  FAB_ITEMS.forEach(function (it, i) {
+    var b = h('button', { type: 'button', title: it[0], 'aria-label': it[0], onclick: function (e) { e.stopPropagation(); closeFab(); it[2](); } });
+    b.style.animationDelay = (i * 40) + 'ms';
+    b.innerHTML = '<svg viewBox="0 0 24 24"><path d="' + it[1] + '"/></svg>';
+    st.appendChild(b);
+  });
+  fab.hidden = false;
 };
+$('fab').addEventListener('click', function (e) { if (e.target === this) closeFab(); });
 async function regenerate() {
   var tail = await pageMessages(cur.id, null, 30), del = [];
   for (var i = tail.length - 1; i >= 0; i--) {
     if (tail[i].role === 'assistant' && !tail[i].hidden) del.push(tail[i]); else break;
   }
   for (var j = 0; j < del.length; j++) await dbDel('messages', del[j].id);
-  await reloadChat(); generateReply();
+  await reloadChat(); generateReply(true);
 }
 async function clearChat() {
   var all = await pageMessages(cur.id, null, 1e9);
@@ -1024,15 +1072,6 @@ async function clearChat() {
   await new Promise(function (r) { tx.oncomplete = r; });
   reloadChat(); toast('已清空');
 }
-async function showPrompt() {
-  if (!lastPrompt || lastPrompt.chatId !== cur.id) { lastPrompt = await buildPrompt(cur); lastPrompt.chatId = cur.id; toast('还没发过消息，这是现在会发送的内容'); }
-  var pr = lastPrompt;
-  var txt = '【系统提示词】（' + pr.system.length + ' 字）\n' + pr.system + '\n\n【对话】（' + pr.messages.length + ' 条，来自最近 ' + pr.stats.history + ' 条消息）\n' +
-    pr.messages.map(function (m) { return '[' + m.role + '] ' + m.content; }).join('\n');
-  openSheet([h('h3', { text: '提示词（世界书触发 ' + pr.stats.entries + ' 条，记忆 ' + pr.stats.memories + ' 条，表情包 ' + pr.stats.stickers + ' 个）' }), h('pre', { text: txt }),
-    h('div', { class: 'btn-row' }, h('button', { class: 'btn', text: '复制', onclick: function () { navigator.clipboard && navigator.clipboard.writeText(txt).then(function () { toast('已复制'); }); } }), h('button', { class: 'btn', text: '关闭', onclick: closeSheet }))]);
-}
-
 /* ---------- 心声页 ---------- */
 var thoughtChar = null;
 function openThoughts(c) { thoughtChar = c; go('s-thoughts'); }
@@ -1274,14 +1313,19 @@ $('b-char-save').onclick = async function () {
   if (!editing || !editing._collect) return;
   var c = editing._collect(); delete c._collect;
   await dbPut('characters', c);
-  if (cur && cur.id === c.id) { Object.assign(cur, c); $('chat-title').textContent = c.name; }
+  if (cur && cur.id === c.id) { Object.assign(cur, c); refreshTitle(); }
   chars = await dbAll('characters');
   toast('已保存'); back();
   if (nav[nav.length - 1] === 's-chat') reloadChat();
 };
 
 /* ---------- 设置页 ---------- */
-var PRESET_KEYS = ['baseUrl', 'apiKey', 'model', 'temperature', 'stream', 'liveDisplay', 'secBaseUrl', 'secApiKey', 'secModel'];
+var draft = null, settingsDirty = false;
+function markDirty() { settingsDirty = true; }
+async function commitSettings() {
+  settings = JSON.parse(JSON.stringify(draft)); await saveSettings(); settingsDirty = false;
+}
+var PRESET_KEYS = ['baseUrl', 'apiKey', 'model', 'temperature', 'stream', 'secBaseUrl', 'secApiKey', 'secModel'];
 function nameSheet(title, init, cb) {
   var inp = h('input', { type: 'text', value: init || '', placeholder: '例如：官方直连 / 备用反代', style: 'width:100%;padding:10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);margin-bottom:10px' });
   openSheet([h('h3', { text: title }), inp, h('div', { class: 'btn-row' },
@@ -1290,57 +1334,65 @@ function nameSheet(title, init, cb) {
   setTimeout(function () { inp.focus(); }, 50);
 }
 function presetGroup() {
-  var list = settings.apiPresets || [], active = list.find(function (p) { return p.id === settings.activePresetId; });
+  if (!draft.apiPresets) draft.apiPresets = [];
+  var list = draft.apiPresets, active = list.find(function (p) { return p.id === draft.activePresetId; });
   var sel = h('select', {}, h('option', { value: '', text: '（未使用预设）' }));
   list.forEach(function (p) { sel.appendChild(h('option', { value: p.id, text: p.name })); });
   sel.value = active ? active.id : '';
   sel.onchange = async function () {
     var p = list.find(function (x) { return x.id === sel.value; });
-    settings.activePresetId = p ? p.id : null;
-    if (p) PRESET_KEYS.forEach(function (k) { settings[k] = p[k] !== undefined ? p[k] : DEFAULTS[k]; });
-    await saveSettings(); buildSettings(); toast(p ? '已切换到「' + p.name + '」' : '已取消预设');
+    draft.activePresetId = p ? p.id : null;
+    if (p) PRESET_KEYS.forEach(function (k) { draft[k] = p[k] !== undefined ? p[k] : DEFAULTS[k]; });
+    markDirty(); buildSettings(); toast(p ? '已切换到「' + p.name + '」' : '已取消预设');
   };
-  function snapshot() { var o = {}; PRESET_KEYS.forEach(function (k) { o[k] = settings[k]; }); return o; }
+  function snapshot() { var o = {}; PRESET_KEYS.forEach(function (k) { o[k] = draft[k]; }); return o; }
   var row = h('div', { class: 'btn-row', style: 'margin:8px 0 14px' },
     h('button', { class: 'btn', text: '另存为新预设', onclick: function () {
       nameSheet('预设名称', '', async function (name) {
         var p = Object.assign({ id: uid('api'), name: name }, snapshot());
-        settings.apiPresets = list.concat([p]); settings.activePresetId = p.id; await saveSettings(); buildSettings(); toast('已保存预设');
+        list.push(p); draft.activePresetId = p.id; markDirty(); buildSettings(); toast('已加入预设，记得点右上角「保存」');
       });
     } }),
     active ? h('button', { class: 'btn', text: '更新「' + active.name + '」', onclick: async function () {
-      Object.assign(active, snapshot()); await saveSettings(); toast('已更新「' + active.name + '」');
+      Object.assign(active, snapshot()); markDirty(); toast('已更新「' + active.name + '」，记得点右上角「保存」');
     } }) : null,
     active ? h('button', { class: 'btn', text: '重命名', onclick: function () {
-      nameSheet('重命名', active.name, async function (name) { active.name = name; await saveSettings(); buildSettings(); });
+      nameSheet('重命名', active.name, async function (name) { active.name = name; markDirty(); buildSettings(); });
     } }) : null,
     active ? h('button', { class: 'btn danger', text: '删除', onclick: function () {
       confirmSheet('删除预设「' + active.name + '」？当前填写的内容不会被清空。', '删除', async function () {
-        settings.apiPresets = list.filter(function (p) { return p.id !== active.id; }); settings.activePresetId = null; await saveSettings(); buildSettings();
+        list.splice(list.indexOf(active), 1); draft.activePresetId = null; markDirty(); buildSettings();
       }, true);
     } }) : null);
   return [h('div', { class: 'group-title', text: '配置预设（一键切换渠道）' }), h('div', { class: 'group' }, field('当前预设', sel,
-    '预设包含：反代地址、Key、模型、温度、流式开关、副 API。修改下面的内容后，要点「更新」才会存进预设。预设和 Key 只存在这台设备上，不会随「导出数据」导出。')), row];
+    '预设包含：反代地址、Key、模型、温度、流式开关、副 API。修改下面的内容后，要点「更新」才会存进预设。改完后点右上角「保存」才会生效。')), row];
 }
 function buildSettings() {
+  function tempField() {
+    var v = h('span', { class: 'val', text: Number(draft.temperature).toFixed(1) });
+    var r = h('input', { type: 'range', min: '0', max: '2', step: '0.1', value: String(draft.temperature) });
+    r.addEventListener('input', function () { draft.temperature = Number(r.value); v.textContent = Number(r.value).toFixed(1); markDirty(); });
+    var f = field('温度', r, '越低越稳定，越高越发散。常用 0.7–1.0。');
+    f.firstChild.appendChild(v); return f;
+  }
   var body = $('settings-body'); body.innerHTML = '';
   presetGroup().forEach(function (n) { body.appendChild(n); });
   function txt(key, label, type, ph, hint) {
-    var i = h('input', { type: type || 'text', placeholder: ph || '', value: settings[key] == null ? '' : settings[key] });
-    i.addEventListener('change', function () { settings[key] = type === 'number' ? Number(i.value) : i.value.trim(); saveSettings(); });
+    var i = h('input', { type: type || 'text', placeholder: ph || '', value: draft[key] == null ? '' : draft[key] });
+    i.addEventListener('change', function () { draft[key] = type === 'number' ? Number(i.value) : i.value.trim(); markDirty(); });
     return field(label, i, hint);
   }
   function sw(key, label, hint) {
-    var s = switchEl(settings[key], function (v) { settings[key] = v; saveSettings(); });
+    var s = switchEl(draft[key], function (v) { draft[key] = v; markDirty(); });
     var row = h('div', { class: 'field inline' }, h('div', {}, h('label', { text: label }), hint ? h('div', { class: 'hint', text: hint }) : null), s.el);
     return row;
   }
   var dl = h('datalist', { id: 'model-list' });
-  var model = h('input', { type: 'text', list: 'model-list', placeholder: '例如 gpt-4o / gemini-2.5-pro', value: settings.model });
-  model.addEventListener('change', function () { settings.model = model.value.trim(); saveSettings(); });
+  var model = h('input', { type: 'text', list: 'model-list', placeholder: '例如 gpt-4o / gemini-2.5-pro', value: draft.model });
+  model.addEventListener('change', function () { draft.model = model.value.trim(); markDirty(); });
   var fetchBtn = h('button', { class: 'btn', text: '拉取模型列表', onclick: async function () {
     try {
-      var list = await fetchModelList(settings.baseUrl, settings.apiKey);
+      var list = await fetchModelList(draft.baseUrl, draft.apiKey);
       dl.innerHTML = ''; list.forEach(function (n) { dl.appendChild(h('option', { value: n })); });
       toast('拉取到 ' + list.length + ' 个模型，点模型输入框选择');
     } catch (e) { openSheet([h('h3', { text: '拉取失败' }), h('pre', { text: e.message }), h('button', { class: 'btn', text: '关闭', onclick: closeSheet })]); }
@@ -1350,23 +1402,17 @@ function buildSettings() {
   body.appendChild(h('div', { class: 'group' },
     txt('baseUrl', '反代地址', 'text', 'https://api.openai.com', '填到域名即可，会自动补 /v1/chat/completions；填 Gemini 官方地址会自动用 Gemini 格式'),
     txt('apiKey', 'API Key', 'password', 'sk-...', '只保存在你这台设备的浏览器里'),
-    field('模型', model), dl, txt('temperature', '温度', 'number', '0.8')));
+    field('模型', model), dl, tempField()));
   body.appendChild(h('div', { class: 'btn-row' }, fetchBtn));
 
   body.appendChild(h('div', { class: 'group-title', text: '输出方式' }));
   body.appendChild(h('div', { class: 'group' },
-    sw('stream', '流式输出', '长回复不容易被网关超时掐断。回复仍会收完再一起显示。'),
-    sw('liveDisplay', '逐字显示', '需要先开流式。打开后回复会一边生成一边显示。'),
+    sw('stream', '流式输出', '长回复不容易被网关超时掐断。回复会收完再一起显示。'),
     sw('autoReply', '发送后自动回复', '关闭时，发送消息后角色不会立刻回，要你点聊天页的「等回复」才会回复。')));
 
   body.appendChild(h('div', { class: 'group-title', text: '副 API（总结、精炼记忆；留空则用主 API）' }));
   body.appendChild(h('div', { class: 'group' },
     txt('secBaseUrl', '反代地址', 'text', '留空使用主 API'), txt('secApiKey', 'API Key', 'password', '可选'), txt('secModel', '模型', 'text', '建议用便宜的小模型')));
-
-  var rules = h('textarea', {}); rules.value = settings.outputRules;
-  rules.addEventListener('change', function () { settings.outputRules = rules.value; saveSettings(); });
-  body.appendChild(h('div', { class: 'group-title', text: '提示词' }));
-  body.appendChild(h('div', { class: 'group' }, field('回复要求（放在系统提示词末尾）', rules, '想让角色用什么语气、发几条消息，改这里就行。聊天页菜单里能看到完整提示词。')));
 
   body.appendChild(h('div', { class: 'group-title', text: '上下文' }));
   body.appendChild(h('div', { class: 'group' },
@@ -1376,7 +1422,8 @@ function buildSettings() {
     txt('worldBookMaxChars', '世界书最多带入多少字', 'number', '6000'),
     txt('stickerPromptLimit', '提示词里最多列出多少个表情包', 'number', '60', '表情包很多时会随机抽取这么多告诉角色，避免提示词太长')));
 }
-onShow['s-settings'] = buildSettings;
+onShow['s-settings'] = function () { draft = JSON.parse(JSON.stringify(settings)); settingsDirty = false; buildSettings(); };
+$('b-set-save').onclick = async function () { await commitSettings(); toast('已保存'); };
 
 /* ---------- 世界书 ---------- */
 async function renderWbList() {
@@ -1442,6 +1489,7 @@ $('file-import').addEventListener('change', async function () {
   try { data = JSON.parse(await f.text()); } catch (e) { toast('文件不是有效的 JSON'); return; }
   if (data.format !== 'myphone-v1') { toast('不是 myphone-v1 格式的文件'); return; }
   var existing = (await dbAll('characters')).length;
+  var withSettings = false;
   var doImport = async function () {
     toast('导入中，请稍候…');
     try {
@@ -1451,18 +1499,36 @@ $('file-import').addEventListener('change', async function () {
       var lastTh = {}; (data.thoughts || []).forEach(function (t) { lastTh[t.characterId] = Math.max(lastTh[t.characterId] || 0, t.ts || 0); });
       (data.characters || []).forEach(function (c) { c.lastSummaryTs = lastByChar[c.id] || 0; c.lastThoughtTs = lastTh[c.id] || 0; });
       for (var j = 0; j < IMPORT_STORES.length; j++) await dbBulkPut(IMPORT_STORES[j], data[IMPORT_STORES[j]] || []);
+      if (withSettings && data.settings) { settings = Object.assign({}, DEFAULTS, data.settings); await saveSettings(); }
       toast('导入完成：' + (data.characters || []).length + ' 个角色，' + (data.messages || []).length + ' 条消息');
       renderList();
     } catch (e) { toast('导入失败：' + e.message); }
   };
-  if (existing) confirmSheet('导入会覆盖现有的角色、聊天、记忆和世界书（设置不受影响）。继续吗？', '覆盖导入', doImport, true);
-  else doImport();
+  var proceed = function () {
+    if (existing) confirmSheet('导入会覆盖现有的角色、聊天、记忆和世界书。继续吗？', '覆盖导入', doImport, true);
+    else doImport();
+  };
+  if (data.settings) {
+    openSheet([h('h3', { text: '这个文件里带有设置' }), h('div', { class: 'hint', text: '包含 API Key 和配置预设。要一并导入（覆盖现在的设置）吗？' }),
+      h('div', { class: 'btn-row' },
+        h('button', { class: 'btn primary', text: '连设置一起导入', onclick: function () { withSettings = true; closeSheet(); proceed(); } }),
+        h('button', { class: 'btn', text: '只导入数据', onclick: function () { closeSheet(); proceed(); } }),
+        h('button', { class: 'btn', text: '取消', onclick: closeSheet }))]);
+  } else proceed();
 });
-async function exportData() {
+function exportData() {
+  openSheet([h('h3', { text: '导出数据' }), h('div', { class: 'hint', text: '带上设置，换设备导入后不用重新填 API Key 和预设。带 Key 的文件请自己保管，不要发给别人。' }),
+    h('div', { class: 'btn-row' },
+      h('button', { class: 'btn primary', text: '导出（含 API Key 和预设）', onclick: function () { closeSheet(); doExport(true); } }),
+      h('button', { class: 'btn', text: '只导出数据', onclick: function () { closeSheet(); doExport(false); } }),
+      h('button', { class: 'btn', text: '取消', onclick: closeSheet }))]);
+}
+async function doExport(withSettings) {
   toast('正在导出…');
   var out = { format: 'myphone-v1', exportedAt: Date.now(), source: 'myphone' };
   for (var i = 0; i < IMPORT_STORES.length; i++) out[IMPORT_STORES[i]] = await dbAll(IMPORT_STORES[i]);
   out.characters.forEach(function (c) { delete c.lastSummaryTs; delete c.lastThoughtTs; });
+  if (withSettings) out.settings = JSON.parse(JSON.stringify(settings));
   var blob = new Blob([JSON.stringify(out)], { type: 'application/json' });
   var a = document.createElement('a'); a.href = URL.createObjectURL(blob);
   a.download = 'myphone-v1-' + new Date().toISOString().slice(0, 10) + '.json';
