@@ -64,7 +64,8 @@ button { cursor:pointer; }
 .bubble.sticker .alt { color:var(--sub); font-size:13px; padding:6px 8px; }
 .bubble.transfer { background:#e9a23b; color:#2b1b00; border:0; min-width:170px; }
 .bubble.transfer b { font-size:18px; display:block; }
-.bubble.offline { max-width:92%; font-size:14px; line-height:1.75; }
+.bubble.offline { max-width:92%; font-size:14.5px; line-height:1.85; letter-spacing:.2px; }
+#fab button.on { background:color-mix(in srgb, var(--accent) 55%, transparent); color:#fff; }
 .bubble .quote { font-size:12px; color:var(--sub); border-left:3px solid var(--line); padding:1px 0 1px 8px; margin-bottom:5px; max-height:3.2em; overflow:hidden; }
 .bubble.voice::before { content:"🎤 "; }
 .sysline { align-self:center; color:var(--sub); font-size:12px; padding:2px 10px; text-align:center; }
@@ -166,7 +167,7 @@ button { cursor:pointer; }
 .selecting .row.me[data-id]::before { order:3; }
 .selecting .row.sel::before { background:var(--accent); border-color:var(--accent); box-shadow:inset 0 0 0 3px var(--card); }
 #quote-bar { display:flex; align-items:center; gap:8px; padding:6px 12px; font-size:12.5px; color:var(--sub); border-top:1px solid var(--line); background:var(--card); }
-#quote-bar[hidden], #selbar[hidden] { display:none; }
+#quote-bar[hidden], #selbar[hidden], #composer[hidden] { display:none; }
 #quote-bar span { flex:1; border-left:3px solid var(--accent); padding-left:8px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 #quote-bar button { border:0; background:none; color:var(--sub); font-size:16px; padding:2px 6px; }
 #selbar { display:flex; align-items:center; gap:8px; padding:8px 12px calc(8px + env(safe-area-inset-bottom)); border-top:1px solid var(--line); background:var(--card); }
@@ -243,7 +244,7 @@ button { cursor:pointer; }
     </header>
     <div id="msgs" class="scroll"></div>
     <div id="quote-bar" hidden><span id="quote-text"></span><button type="button" id="quote-x" aria-label="取消引用">✕</button></div>
-    <div id="selbar" hidden><span id="sel-n">已选 0 条</span><button type="button" class="pill ghost" id="sel-copy">复制</button><button type="button" class="pill ghost" id="sel-del">删除</button><button type="button" class="pill" id="sel-cancel">取消</button></div>
+    <div id="selbar" hidden><span id="sel-n">已选 0 条</span><button type="button" class="pill ghost" id="sel-edit">编辑</button><button type="button" class="pill ghost" id="sel-copy">复制</button><button type="button" class="pill ghost" id="sel-del">删除</button><button type="button" class="pill" id="sel-cancel">取消</button></div>
     <form id="composer" autocomplete="off">
       <button type="button" class="icon" id="b-sticker" aria-label="表情包">☺</button>
       <textarea id="input" rows="1" placeholder="说点什么…"></textarea>
@@ -386,6 +387,8 @@ function countMessagesAfter(cid, ts) {
 /* ---------- 设置 ---------- */
 /* 系统提示词里的「回复要求」：内置在代码里，不在界面上显示 */
 var OUTPUT_RULES = '像真人在手机上聊天一样回复：口语化，简短自然。\n把回复拆成几条短消息，每条消息单独一行（最多 6 条）。\n不要在开头写你的名字，不要写旁白、括号动作或解释，除非角色设定要求这样。\n始终保持角色设定，不要承认自己是 AI。';
+/* 线下模式：面对面的小说式叙述，不拆气泡、不发表情包 */
+var OFFLINE_RULES = '现在是线下场景，你和用户面对面相处，不再是手机聊天。\n用小说式的叙述回复：用第三人称写角色的动作、神态、环境，对白用「」括起来，连贯地写成一段或几段文字。\n篇幅 200 到 600 字，一次写完，不要拆成多条消息，不要发表情包，不要用你的名字做开头。\n只写角色自己的言行和感受，不要替用户说话、替用户做动作。\n始终保持角色设定，不要承认自己是 AI。';
 var DEFAULTS = {
   baseUrl: '', apiKey: '', model: '', temperature: 0.8,
   stream: false, themeId: 'default', customCss: '',
@@ -439,7 +442,7 @@ function fmtTime(ts, tz) {
 
 function buildSystem(ctx) {
   var c = ctx.char, s = ctx.settings, L = [];
-  L.push('你正在扮演「' + (c.realName || c.name) + '」，通过手机和用户聊天。');
+  L.push('你正在扮演「' + (c.realName || c.name) + '」，' + (c.offlineMode ? '和用户面对面相处。' : '通过手机和用户聊天。'));
   if (c.persona) L.push('# 角色设定\n' + c.persona);
   var me = [];
   if (c.userNickname) me.push('你称呼用户为：' + c.userNickname);
@@ -453,7 +456,7 @@ function buildSystem(ctx) {
   if (ctx.memories.length) {
     L.push('# 长期记忆（你们之前发生的事，按时间从早到晚）\n' + ctx.memories.map(function (m) { return '- ' + m.content; }).join('\n'));
   }
-  if (ctx.stickers && ctx.stickers.length) {
+  if (!c.offlineMode && ctx.stickers && ctx.stickers.length) {
     L.push('# 可发送的表情包\n想发表情包时，单独占一行，写成 [表情包：名称]，名称必须从下面选一个，不要自己编：\n' +
       ctx.stickers.map(function (st) { return st.name; }).join('、'));
   }
@@ -461,7 +464,7 @@ function buildSystem(ctx) {
     L.push('# 你此刻的内心（只有你自己知道，不要直接念出来，但要让言行和它保持一致）\n心声：' + ctx.thought.heartfeltVoice + (ctx.thought.randomJottings ? '\n散记：' + ctx.thought.randomJottings : ''));
   }
   L.push('# 当前时间\n' + fmtTime(ctx.now, c.timeZone));
-  L.push('# 回复要求\n' + OUTPUT_RULES);
+  L.push('# 回复要求\n' + (c.offlineMode ? OFFLINE_RULES : OUTPUT_RULES));
   return L.join('\n\n');
 }
 
@@ -722,11 +725,14 @@ function h(tag, props) {
     else if (v === true) el.setAttribute(k, '');
     else if (v !== false && v != null) el.setAttribute(k, v);
   });
-  for (var i = 2; i < arguments.length; i++) {
-    var c = arguments[i];
-    if (c == null || c === false) continue;
-    el.appendChild(typeof c === 'string' ? document.createTextNode(c) : c);
-  }
+  (function add(list) {
+    for (var i = 0; i < list.length; i++) {
+      var c = list[i];
+      if (c == null || c === false) continue;
+      if (Array.isArray(c)) add(c);
+      else el.appendChild(typeof c === 'string' ? document.createTextNode(c) : c);
+    }
+  })(Array.prototype.slice.call(arguments, 2));
   return el;
 }
 var toastTimer;
@@ -889,7 +895,7 @@ var rounds = {}; /* 每个角色当前这一轮回复的状态 */
 
 async function openChat(cid) {
   cur = chars.find(function (c) { return c.id === cid; }) || await dbGet('characters', cid);
-  refreshTitle(); if (selMode) exitSelect(); setQuote(null);
+  refreshTitle(); if (selMode) exitSelect(); setQuote(null); $('input').placeholder = cur.offlineMode ? '写下你的动作或对白…' : '说点什么…';
   $('msgs').innerHTML = ''; oldest = null;
   go('s-chat');
   var page = await pageMessages(cid, null, PAGE);
@@ -1001,15 +1007,20 @@ $('sel-del').onclick = function () {
   }, true);
 };
 
+function editable(m) { return !m.type || m.type === 'text' || m.type === 'voice' || m.type === 'offline'; }
+function editMessage(m) {
+  textSheet('编辑消息（改完角色也会按新内容理解）', m.content, [{ text: '保存', cls: 'primary', fn: async function (v) { m.content = v; await dbPut('messages', m); reloadChat(); } }, { text: '取消' }]);
+}
+$('sel-edit').onclick = async function () {
+  var ids = Object.keys(selected); if (ids.length !== 1) { toast('编辑只能选一条消息'); return; }
+  var m = (await selectedMsgs())[0]; if (!m || !editable(m)) { toast('这种消息不能编辑'); return; }
+  exitSelect(); editMessage(m);
+};
 function messageMenu(m) {
   var items = [['引用', function () { setQuote({ id: m.id, content: String(m.content || msgToText(m)), name: m.role === 'user' ? '我' : cur.name }); }],
     ['选择', function () { enterSelect(m.id); }],
     ['复制', function () { (navigator.clipboard ? navigator.clipboard.writeText(m.content || msgToText(m)) : Promise.reject()).then(function () { toast('已复制'); }, function () { toast('复制失败'); }); }]];
-  if (!m.type || m.type === 'text' || m.type === 'voice' || m.type === 'offline') {
-    items.push(['编辑', function () {
-      textSheet('编辑消息', m.content, [{ text: '保存', cls: 'primary', fn: async function (v) { m.content = v; await dbPut('messages', m); reloadChat(); } }, { text: '取消' }]);
-    }]);
-  }
+  if (editable(m)) items.push(['编辑', function () { editMessage(m); }]);
   items.push(['删除', async function () { await dbDel('messages', m.id); reloadChat(); }]);
   menuSheet('', items);
 }
@@ -1018,7 +1029,7 @@ function isTyping(cid) { var r = rounds[cid]; return !!(r && r.active); }
 function refreshTitle() {
   var t = $('chat-title'); if (!cur) return;
   if (isTyping(cur.id)) { t.className = 'typing-title'; t.innerHTML = '对方正在输入中<i>.</i><i>.</i><i>.</i>'; }
-  else { t.className = ''; t.textContent = cur.name; }
+  else { t.className = ''; t.textContent = cur.name + (cur.offlineMode ? ' · 线下' : ''); }
 }
 function appendMsgNode(node) { $('msgs').appendChild(node); }
 
@@ -1027,7 +1038,7 @@ $('composer').addEventListener('submit', async function (e) {
   e.preventDefault();
   var v = $('input').value.trim(); if (!v) return;
   $('input').value = ''; $('input').style.height = 'auto';
-  var m = { id: uid(cur.id), characterId: cur.id, role: 'user', type: 'text', content: v, ts: Date.now() };
+  var m = { id: uid(cur.id), characterId: cur.id, role: 'user', type: cur.offlineMode ? 'offline' : 'text', content: v, ts: Date.now() };
   if (quoting) { m.meta = { quote: { content: quoting.content, name: quoting.name } }; setQuote(null); }
   await dbPut('messages', m);
   var n = msgNode(m); if (lastShownTs && m.ts - lastShownTs > 600000) appendMsgNode(h('div', { class: 'sysline', text: fmtTime(m.ts).replace(/:\d\d$/, '') }));
@@ -1120,7 +1131,7 @@ async function generateReply(fresh) {
       system: prompt.system, messages: prompt.messages, stream: settings.stream
     });
     if (!r.active || r.won) return;
-    var items = parseReplyLines(splitReply(text, 12), prompt.pool), base = Date.now(), saved = [];
+    var items = char.offlineMode ? (text.trim() ? [{ type: 'offline', content: text.trim() }] : []) : parseReplyLines(splitReply(text, 12), prompt.pool), base = Date.now(), saved = [];
     if (!items.length) throw new Error('模型的回复里没有可显示的内容（只有找不到的表情包）。原始回复：' + text.slice(0, 200));
     r.won = true;
     items.forEach(function (it, i) {
@@ -1169,9 +1180,20 @@ var FAB_ITEMS = [
   ['心声', 'M12 21s-7-4.4-9.3-9A5.3 5.3 0 0 1 12 6.5 5.3 5.3 0 0 1 21.3 12C19 16.6 12 21 12 21z', function () { openThoughts(cur); }],
   ['记忆', 'M5 4h11a3 3 0 0 1 3 3v13H8a3 3 0 0 1-3-3V4zM8 17h11M9 8h6', function () { go('s-memory'); }],
   ['角色设置', 'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19 12l2-1.3-2-3.4-2.3.8a7 7 0 0 0-1.7-1L14.6 4h-4l-.4 2.1a7 7 0 0 0-1.7 1l-2.3-.8-2 3.4L6 12l-2 1.3 2 3.4 2.3-.8a7 7 0 0 0 1.7 1l.4 2.1h4l.4-2.1a7 7 0 0 0 1.7-1l2.3.8 2-3.4z', function () { editChar(cur.id); }],
+  ['线下模式', 'M3 11l9-7 9 7M5 10v10h14V10M10 20v-6h4v6', toggleOffline],
   ['重新生成上一轮回复', 'M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7', regenerate],
   ['清空聊天记录', 'M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v6M14 11v6', function () { confirmSheet('清空和「' + cur.name + '」的全部聊天记录？', '清空', clearChat, true); }]
 ];
+async function toggleOffline() {
+  cur.offlineMode = !cur.offlineMode;
+  await dbPut('characters', cur);
+  var ix = chars.findIndex(function (c) { return c.id === cur.id; }); if (ix >= 0) chars[ix] = cur;
+  var m = { id: uid(cur.id), characterId: cur.id, role: 'user', type: 'pat', content: cur.offlineMode ? '—— 进入线下模式 ——' : '—— 回到线上聊天 ——', ts: Date.now() };
+  await dbPut('messages', m);
+  var n = msgNode(m); if (n) { appendMsgNode(n); lastShownTs = m.ts; scrollBottom(); }
+  refreshTitle(); $('input').placeholder = cur.offlineMode ? '写下你的动作或对白…' : '说点什么…';
+  toast(cur.offlineMode ? '线下模式：对方会用小说式长文回复' : '已回到线上聊天');
+}
 function closeFab() { $('fab').hidden = true; }
 $('b-chatmenu').onclick = function () {
   var fab = $('fab'), st = $('fab-stack');
@@ -1180,6 +1202,7 @@ $('b-chatmenu').onclick = function () {
   FAB_ITEMS.forEach(function (it, i) {
     var b = h('button', { type: 'button', title: it[0], 'aria-label': it[0], onclick: function (e) { e.stopPropagation(); closeFab(); it[2](); } });
     b.style.animationDelay = (i * 40) + 'ms';
+    if (it[2] === toggleOffline && cur.offlineMode) { b.className = 'on'; b.title = b.title + '（已开，点击关闭）'; }
     b.innerHTML = '<svg viewBox="0 0 24 24"><path d="' + it[1] + '"/></svg>';
     st.appendChild(b);
   });
