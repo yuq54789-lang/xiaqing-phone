@@ -160,6 +160,8 @@ button { cursor:pointer; }
 #fab button:active { transform:scale(.92); }
 #fab svg { width:22px; height:22px; stroke:currentColor; fill:none; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
 @keyframes fabpop { from { opacity:0; transform:translateY(-10px) scale(.5); } to { opacity:1; transform:none; } }
+#msgs { background-size:cover; background-position:center; background-attachment:local; }
+.bg-prev { height:120px; border-radius:10px; border:1px solid var(--line); background:var(--bg) center/cover; margin-bottom:8px; display:flex; align-items:center; justify-content:center; color:var(--sub); font-size:13px; }
 /* 美化页：悬浮磨砂卡片 */
 #s-beauty { background:linear-gradient(160deg, color-mix(in srgb, var(--accent) 22%, var(--bg)), var(--bg) 55%, color-mix(in srgb, var(--accent) 12%, var(--bg))); }
 .glass { background:color-mix(in srgb, var(--card) 62%, transparent); backdrop-filter:blur(18px) saturate(1.5); -webkit-backdrop-filter:blur(18px) saturate(1.5);
@@ -218,7 +220,24 @@ button { cursor:pointer; }
 .av-pick .avatar { width:52px; height:52px; }
 /* 桌面 */
 #s-home { background:radial-gradient(120% 60% at 50% 0%, color-mix(in srgb, var(--accent) 14%, var(--bg)) 0%, var(--bg) 70%); }
-.home { padding:calc(36px + env(safe-area-inset-top)) 20px calc(30px + env(safe-area-inset-bottom)); }
+.home { padding:calc(40px + env(safe-area-inset-top)) 20px calc(130px + env(safe-area-inset-bottom)); }
+.hm-top { display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:14px; }
+.hm-clock { font-size:76px; font-weight:600; letter-spacing:-1px; line-height:1; color:color-mix(in srgb, var(--ink) 70%, transparent); font-variant-numeric:tabular-nums; }
+.hm-date { text-align:right; font-size:15px; line-height:1.9; color:color-mix(in srgb, var(--ink) 60%, transparent); padding-top:6px; }
+.hm-week { display:flex; gap:7px; margin-bottom:26px; }
+.hm-week .d { flex:1; text-align:center; padding:9px 0 10px; border-radius:14px; background:color-mix(in srgb, var(--card) 50%, transparent); backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px); }
+.hm-week .d b { display:block; font-size:21px; font-weight:500; }
+.hm-week .d span { display:block; font-size:11px; color:var(--sub); margin-top:2px; }
+.hm-week .d.today { background:color-mix(in srgb, var(--card) 78%, transparent); box-shadow:0 4px 14px rgba(0,0,0,.12); padding-bottom:22px; }
+.wdg { grid-column:span 2; grid-row:span 2; aspect-ratio:1/1; border-radius:24px; overflow:hidden; border:0; padding:0; position:relative; box-shadow:0 6px 18px rgba(0,0,0,.18);
+  background:color-mix(in srgb, var(--card) 60%, transparent) center/cover no-repeat; display:flex; align-items:center; justify-content:center; color:var(--sub); font-size:34px; }
+.wdg:active { transform:scale(.98); }
+.dock { position:absolute; left:14px; right:14px; bottom:calc(14px + env(safe-area-inset-bottom)); display:grid; grid-template-columns:repeat(4,1fr); padding:14px 6px 10px; border-radius:32px;
+  background:color-mix(in srgb, var(--card) 55%, transparent); backdrop-filter:blur(22px) saturate(1.6); -webkit-backdrop-filter:blur(22px) saturate(1.6); box-shadow:0 8px 28px rgba(0,0,0,.16); }
+.dock .app { position:relative; }
+.dock .app span { position:absolute; left:0; right:0; top:0; bottom:0; opacity:0; overflow:hidden; font-size:1px; }
+.app .tile img { width:100%; height:100%; object-fit:cover; border-radius:inherit; display:block; }
+.app .tile.img { background:none !important; }
 .home-clock { text-align:center; margin-bottom:22px; }
 .home-clock .big { font-size:64px; font-weight:200; letter-spacing:2px; line-height:1.1; font-variant-numeric:tabular-nums; }
 .home-clock .date { color:var(--sub); font-size:14px; margin-top:4px; }
@@ -229,7 +248,7 @@ button { cursor:pointer; }
 .widget .cap { font-size:11px; color:var(--sub); letter-spacing:.5px; }
 .widget .name { font-weight:600; }
 .widget .last { color:var(--sub); font-size:13px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-.app-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:22px 8px; }
+.app-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:18px 8px; align-items:start; }
 .app { display:flex; flex-direction:column; align-items:center; gap:7px; background:none; border:0; padding:0; }
 .app .tile { width:62px; height:62px; border-radius:18px; display:flex; align-items:center; justify-content:center; color:#fff; box-shadow:0 2px 6px rgba(0,0,0,.14); }
 .app:active .tile { transform:scale(.93); }
@@ -242,10 +261,11 @@ button { cursor:pointer; }
 
   <section class="screen active" id="s-home">
     <div class="scroll home">
-      <div class="home-clock"><div class="big" id="home-time"></div><div class="date" id="home-date"></div></div>
-      <div id="home-widget"></div>
+      <div class="hm-top"><div class="hm-clock" id="home-time"></div><div class="hm-date"><div id="home-date"></div><div id="home-lunar"></div></div></div>
+      <div class="hm-week" id="home-week"></div>
       <div class="app-grid" id="app-grid"></div>
     </div>
+    <div class="dock" id="dock"></div>
   </section>
 
   <section class="screen" id="s-list">
@@ -268,6 +288,11 @@ button { cursor:pointer; }
       <button type="button" class="pill ghost" id="b-wait">等回复</button>
       <button type="submit" class="pill" id="b-send">发送</button>
     </form>
+  </section>
+
+  <section class="screen" id="s-chatset">
+    <header class="bar"><button class="icon" data-back>‹</button><h2>聊天设置</h2></header>
+    <div class="scroll"><div class="pad" id="chatset-body"></div></div>
   </section>
 
   <section class="screen" id="s-beauty">
@@ -403,14 +428,14 @@ function countMessagesAfter(cid, ts) {
 
 /* ---------- 设置 ---------- */
 /* 系统提示词里的「回复要求」：内置在代码里，不在界面上显示 */
-var OUTPUT_RULES = '像真人在手机上聊天一样回复：口语化，简短自然。\n把回复拆成几条短消息，每条消息单独一行（最多 6 条）。\n不要在开头写你的名字，不要写旁白、括号动作或解释，除非角色设定要求这样。\n始终保持角色设定，不要承认自己是 AI。';
+var OUTPUT_RULES = '像真人在手机上聊天一样回复：口语化，简短自然。\n把回复拆成几条短消息，每条消息单独一行（最多 6 条）。\n想引用用户说过的某句话来回复时，在那条消息开头写 [引用：用户原话片段]，后面接你的回复，同一行；偶尔用就好。\n不要在开头写你的名字，不要写旁白、括号动作或解释，除非角色设定要求这样。\n始终保持角色设定，不要承认自己是 AI。';
 /* 线下模式：面对面的小说式叙述，不拆气泡、不发表情包 */
 var OFFLINE_RULES = '现在是线下场景，你和用户面对面相处，不再是手机聊天。\n用小说式的叙述回复：用第三人称写角色的动作、神态、环境，对白用「」括起来，连贯地写成一段或几段文字。\n篇幅 200 到 600 字，一次写完，不要拆成多条消息，不要发表情包，不要用你的名字做开头。\n只写角色自己的言行和感受，不要替用户说话、替用户做动作。\n始终保持角色设定，不要承认自己是 AI。';
 var DEFAULTS = {
   baseUrl: '', apiKey: '', model: '', temperature: 0.8,
-  stream: false, themeId: 'default', customCss: '',
+  stream: false, themeId: 'default', customCss: '', homeBg: '', fontUrl: '', fontData: '', fontName: '',
   secBaseUrl: '', secApiKey: '', secModel: '',
-  scanDepth: 5, worldBookMaxChars: 6000, memoryLimit: 20, defaultContext: 30, stickerPromptLimit: 60, autoReply: false, apiPresets: [], activePresetId: null
+  scanDepth: 5, worldBookMaxChars: 6000, memoryLimit: 20, summaryMax: 200, defaultContext: 30, stickerPromptLimit: 60, autoReply: false, apiPresets: [], activePresetId: null
 };
 var settings = Object.assign({}, DEFAULTS);
 async function loadSettings() {
@@ -450,6 +475,38 @@ function pickMemories(mems, limit) {
   }).sort(function (a, b) { return a.ts - b.ts; });
   rest = rest.slice(-limit);
   return (refined ? [refined] : []).concat(rest);
+}
+
+/* 三层记忆：①常驻（core）每次都带 ②最近 N 条记忆（滑动窗口）每次都带 ③更早的历史记忆库——用当前聊天里的关键词在本地匹配，匹配到才带入 */
+var STOPCH = '的了是我你他她它在有和就不也都吗吧呢啊嗯哦这那一个什么么着过到说要会可以还很';
+var COMMON_BI = ['今天','明天','昨天','觉得','知道','时候','现在','已经','因为','所以','但是','如果','可是','还是','没有','自己','真的','感觉','一下','一起','出来','起来','东西','怎么','然后','应该','可能','不会','我们','你们','他们','她们','开始','不过','其实','比较','一点','有点','今晚','晚上','早上','最近'];
+function memTokens(text) {
+  var set = {}, t = String(text || '').toLowerCase();
+  (t.match(/[\u4e00-\u9fff]+/g) || []).forEach(function (run) {
+    for (var i = 0; i < run.length - 1; i++) {
+      var a = run.charAt(i), b = run.charAt(i + 1);
+      if (STOPCH.indexOf(a) >= 0 || STOPCH.indexOf(b) >= 0 || COMMON_BI.indexOf(a + b) >= 0) continue;
+      set[a + b] = 1;
+    }
+  });
+  (t.match(/[a-z0-9]{3,}/g) || []).forEach(function (w) { set[w] = 2; });
+  return set;
+}
+function selectMemories(mems, queryTexts, windowSize, matchLimit) {
+  var byTs = function (a, b) { return a.ts - b.ts; };
+  var core = mems.filter(function (m) { return m.core; }).sort(byTs);
+  var rest = mems.filter(function (m) { return !m.core; }).sort(byTs);
+  var n = windowSize > 0 ? windowSize : 20;
+  var recent = rest.slice(-n), older = rest.slice(0, Math.max(0, rest.length - n));      /* 第二层：最近 N 条记忆；第三层：更早的历史记忆库 */
+  var q = memTokens((queryTexts || []).join('\n')), keys = Object.keys(q), scored = [];
+  older.forEach(function (m) {
+    var c = String(m.content || '').toLowerCase(), sc = 0;
+    keys.forEach(function (k) { if (c.indexOf(k) >= 0) sc += q[k]; });
+    if (sc >= 1) scored.push({ m: m, s: sc });
+  });
+  scored.sort(function (a, b) { return b.s - a.s || b.m.ts - a.m.ts; });
+  var matched = scored.slice(0, matchLimit || 8).map(function (x) { return x.m; }).sort(byTs);
+  return { core: core, recent: recent, matched: matched, all: core.concat(matched, recent) };
 }
 
 function fmtTime(ts, tz) {
@@ -512,6 +569,8 @@ function parseReplyLines(lines, pool) {
       if (st) out.push({ type: 'sticker', content: st.url, meta: { meaning: st.name } });
       return; // 找不到对应表情包就丢掉这一行
     }
+    var q = ln.match(/^[\[【]\s*引用\s*[:：]\s*(.+?)\s*[\]】]\s*([\s\S]*)$/);
+    if (q && q[2]) { out.push({ type: 'text', content: q[2], meta: { quote: { content: q[1] } } }); return; }
     out.push({ type: 'text', content: ln });
   });
   return out;
@@ -691,11 +750,16 @@ function secondaryApi() {
   };
 }
 async function summarizeMessages(char, msgs) {
-  var api = secondaryApi();
+  var api = secondaryApi(), max = Number(settings.summaryMax) > 30 ? Number(settings.summaryMax) : 200;
   var system = '你是「' + (char.realName || char.name) + '」。请站在你自己的角度，用第一人称（“我”）把下面这段聊天记录总结成一条记忆。' +
-    '保留关键事实、约定、情绪变化和称呼变化，忽略寒暄。不超过 300 字，只输出总结正文，不要标题或解释。';
-  return (await callLLM({ base: api.base, key: api.key, model: api.model, temperature: 0.5, system: system,
+    '保留关键事实、约定、情绪变化和称呼变化，忽略寒暄和重复内容。严格控制在 ' + max + ' 字以内（越短越好），不要分点、不要标题、不要解释，只输出一段总结正文。';
+  var out = (await callLLM({ base: api.base, key: api.key, model: api.model, temperature: 0.5, system: system,
     messages: [{ role: 'user', content: transcript(msgs, char) }], stream: false })).trim();
+  if (out.length > max * 1.4) {   /* 模型写太长了：再压缩一次 */
+    out = (await callLLM({ base: api.base, key: api.key, model: api.model, temperature: 0.3, system: '把下面这段记忆压缩到 ' + max + ' 字以内，保留最关键的事实、约定和情绪，保持第一人称，只输出正文。',
+      messages: [{ role: 'user', content: out }], stream: false })).trim();
+  }
+  return out;
 }
 async function refineMemories(char, mems, targetChars) {
   var api = secondaryApi();
@@ -728,7 +792,7 @@ async function generateThought(char, msgs) {
 }
 
 /* 导出给测试用 */
-if (typeof module !== 'undefined') module.exports = { triggeredEntries: triggeredEntries, pickMemories: pickMemories, buildSystem: buildSystem, msgToText: msgToText, toApiMessages: toApiMessages, splitReply: splitReply, parseThought: parseThought, openaiUrl: openaiUrl, stickerPool: stickerPool, sampleStickers: sampleStickers, parseReplyLines: parseReplyLines, findSticker: findSticker };
+if (typeof module !== 'undefined') module.exports = { selectMemories: selectMemories, triggeredEntries: triggeredEntries, pickMemories: pickMemories, buildSystem: buildSystem, msgToText: msgToText, toApiMessages: toApiMessages, splitReply: splitReply, parseThought: parseThought, openaiUrl: openaiUrl, stickerPool: stickerPool, sampleStickers: sampleStickers, parseReplyLines: parseReplyLines, findSticker: findSticker };
 
 /* ---------- ⑤ 界面 ---------- */
 var $ = function (id) { return document.getElementById(id); };
@@ -798,6 +862,7 @@ function clearTrans() {
 }
 function activate(id, isBack) {
   clearTrans();
+  if (id === 's-home' || id === 's-list') clearChatLook();
   var prev = document.querySelector('.screen.active'), next = $(id);
   if (prev === next) { if (onShow[id]) onShow[id](); return; }
   if (prev) {
@@ -829,19 +894,19 @@ document.addEventListener('click', function (e) { if (e.target.closest && e.targ
  * 想增删图标、改顺序或颜色，只改下面这个 APPS 数组就行：
  * name=名字，color=图标底色，icon=SVG 路径，tap=点击后做什么 */
 var APPS = [
-  { name: '聊天', color: '#c4572a', icon: 'M4 5h16a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H10l-4 3v-3H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1z',
+  { name: '聊天', img: 'https://i.imgs.ovh/2026/11/12/c26c5b797e2947f12e96db4ba63d430d.jpg', color: '#c4572a', icon: 'M4 5h16a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H10l-4 3v-3H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1z',
     tap: function () { go('s-list'); } },
-  { name: '记忆', color: '#4f7c6a', icon: 'M6 3h12a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H6zM9 3v18M12 8h4M12 12h4',
+  { name: '记忆', img: 'https://i.imgs.ovh/2026/11/12/40a87fcf8fb35d7c49c396bf7455623f.jpg', color: '#4f7c6a', icon: 'M6 3h12a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H6zM9 3v18M12 8h4M12 12h4',
     tap: function () { pickCharThen('选择角色', function (c) { cur = c; go('s-memory'); }); } },
-  { name: '世界书', color: '#c08a2e', icon: 'M12 6c-2-1.5-5-2-8-1.5v13c3-.5 6 0 8 1.5 2-1.5 5-2 8-1.5v-13C17 4 14 4.5 12 6zM12 6v13',
+  { name: '世界书', img: 'https://i.imgs.ovh/2026/11/12/d67bd0f136d13523ba65030a3b438ec7.jpg', color: '#c08a2e', icon: 'M12 6c-2-1.5-5-2-8-1.5v13c3-.5 6 0 8 1.5 2-1.5 5-2 8-1.5v-13C17 4 14 4.5 12 6zM12 6v13',
     tap: function () { go('s-wblist'); } },
-  { name: '表情包', color: '#8a5a8f', icon: 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM8.5 14c1 1.5 2.2 2 3.5 2s2.5-.5 3.5-2M9 9.5h.01M15 9.5h.01',
+  { name: '表情包', img: 'https://i.imgs.ovh/2026/11/12/21ffb2ac40aec04e658fe44111c04e70.jpg', color: '#8a5a8f', icon: 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM8.5 14c1 1.5 2.2 2 3.5 2s2.5-.5 3.5-2M9 9.5h.01M15 9.5h.01',
     tap: function () { openStickerPanel('all', true); } },
-  { name: '美化', color: '#b0577a', icon: 'M12 3a9 9 0 1 0 0 18c1.2 0 2-.8 2-1.8 0-1.4-1.3-1.7-1.3-3 0-1 .8-1.7 1.9-1.7H17a4 4 0 0 0 4-4C21 6.6 17 3 12 3zM7.5 11h.01M10 7.5h.01M14.5 7.5h.01',
+  { name: '美化', img: 'https://i.imgs.ovh/2026/11/12/8500e6fda76097cda9ee7f8a6090a3e3.jpg', color: '#b0577a', icon: 'M12 3a9 9 0 1 0 0 18c1.2 0 2-.8 2-1.8 0-1.4-1.3-1.7-1.3-3 0-1 .8-1.7 1.9-1.7H17a4 4 0 0 0 4-4C21 6.6 17 3 12 3zM7.5 11h.01M10 7.5h.01M14.5 7.5h.01',
     tap: function () { go('s-beauty'); } },
-  { name: 'API设置', color: '#3d5a80', icon: 'M4 7h9M17 7h3M4 17h3M11 17h9M13 4v6M7 14v6',
+  { name: 'API设置', img: 'https://i.imgs.ovh/2026/11/12/e5ce0267cf4bd0b37d18a1866a178dd9.jpg', color: '#3d5a80', icon: 'M4 7h9M17 7h3M4 17h3M11 17h9M13 4v6M7 14v6',
     tap: function () { go('s-settings'); } },
-  { name: '数据备份', color: '#6b6b6b', icon: 'M4 7h16v4H4zM6 11v8h12v-8M10 15h4',
+  { name: '数据备份', img: 'https://i.imgs.ovh/2026/11/12/fb4761d50fc0237e8566e4ed097f9920.jpg', color: '#6b6b6b', icon: 'M4 7h16v4H4zM6 11v8h12v-8M10 15h4',
     tap: function () { menuSheet('数据备份', [['导入数据', startImport], ['导出数据', exportData]]); } }
 ];
 function pickCharThen(title, fn) {
@@ -856,27 +921,57 @@ function appIcon(d) {
 function renderClock() {
   var n = new Date();
   $('home-time').textContent = n.toTimeString().slice(0, 5);
-  $('home-date').textContent = n.toLocaleDateString('zh-CN', { month: 'long', day: 'numeric', weekday: 'long' });
+  var per = n.getHours() < 5 ? '凌晨' : n.getHours() < 12 ? '上午' : n.getHours() < 18 ? '下午' : '晚上';
+  $('home-date').textContent = (n.getMonth() + 1) + '月' + n.getDate() + '日 ' + '周' + '日一二三四五六'.charAt(n.getDay()) + ' ' + per;
+  var lunar = '';
+  try {
+    var pp = new Intl.DateTimeFormat('zh-CN-u-ca-chinese', { month: 'long', day: 'numeric' }).formatToParts(n), mo = '', dd = 0;
+    pp.forEach(function (x) { if (x.type === 'month') mo = x.value; if (x.type === 'day') dd = Number(x.value); });
+    var CN = ['', '初一', '初二', '初三', '初四', '初五', '初六', '初七', '初八', '初九', '初十', '十一', '十二', '十三', '十四', '十五', '十六', '十七', '十八', '十九', '二十', '廿一', '廿二', '廿三', '廿四', '廿五', '廿六', '廿七', '廿八', '廿九', '三十'];
+    lunar = mo + (CN[dd] || '');
+  } catch (e) {}
+  $('home-lunar').textContent = lunar;
+  var wk = $('home-week'); wk.innerHTML = '';
+  var mon = new Date(n); mon.setDate(n.getDate() - ((n.getDay() + 6) % 7));
+  for (var k = 0; k < 7; k++) {
+    var d = new Date(mon); d.setDate(mon.getDate() + k);
+    wk.appendChild(h('div', { class: 'd' + (d.toDateString() === n.toDateString() ? ' today' : '') }, h('b', { text: String(d.getDate()) }), h('span', { text: '周' + '一二三四五六日'.charAt(k) })));
+  }
+}
+var DOCK_NAMES = ['聊天', '记忆', '世界书', '表情包'];
+function appBtn(a) {
+  var tile = h('div', { class: 'tile', style: 'background:' + a.color }, appIcon(a.icon));
+  var b = h('button', { class: 'app', onclick: a.tap, 'aria-label': a.name }, tile, h('span', { text: a.name }));
+  if (a.img) {
+    var im = new Image(); im.alt = '';
+    im.onload = function () { tile.innerHTML = ''; tile.classList.add('img'); tile.appendChild(im); };   /* 图片加载成功才替换，失败就保留默认图标 */
+    im.src = a.img;
+  }
+  return b;
+}
+function photoWidget(key) {
+  var w = h('button', { type: 'button', class: 'wdg', 'aria-label': '照片小组件', text: '＋' });
+  dbGet('settings', key).then(function (r) { if (r && r.data) { w.textContent = ''; w.style.backgroundImage = 'url(' + r.data + ')'; } });
+  w.onclick = async function () {
+    var has = await dbGet('settings', key);
+    var pick = function () { pickImage(900, 0.8, async function (d) { await dbPut('settings', { key: key, data: d }); renderHome(); }); };
+    if (!has || !has.data) pick();
+    else menuSheet('照片小组件', [['更换照片', pick], ['移除照片', async function () { await dbDel('settings', key); renderHome(); }]]);
+  };
+  return w;
 }
 async function renderHome() {
   renderClock();
-  var grid = $('app-grid'); grid.innerHTML = '';
-  APPS.forEach(function (a) {
-    grid.appendChild(h('button', { class: 'app', onclick: a.tap },
-      h('div', { class: 'tile', style: 'background:' + a.color }, appIcon(a.icon)), h('span', { text: a.name })));
-  });
+  var grid = $('app-grid'), dock = $('dock'); grid.innerHTML = ''; dock.innerHTML = '';
+  var byName = {}; APPS.forEach(function (a) { byName[a.name] = a; });
+  DOCK_NAMES.forEach(function (n) { if (byName[n]) dock.appendChild(appBtn(byName[n])); });
+  var rest = APPS.filter(function (a) { return DOCK_NAMES.indexOf(a.name) === -1; });
+  /* 仿 iOS 桌面：两个图标 + 大照片组件，再一个图标 + 另一个大组件 */
+  [rest[0], rest[1]].forEach(function (a) { if (a) grid.appendChild(appBtn(a)); });
+  grid.appendChild(photoWidget('widgetA'));
+  rest.slice(2).forEach(function (a) { grid.appendChild(appBtn(a)); });
+  grid.appendChild(photoWidget('widgetB'));
   chars = await dbAll('characters');
-  var w = $('home-widget'); w.innerHTML = '';
-  var best = null;
-  for (var i = 0; i < chars.length; i++) {
-    var last = (await pageMessages(chars[i].id, null, 8)).filter(function (m) { return !m.hidden && m.type !== 'system'; }).pop();
-    if (last && (!best || last.ts > best.last.ts)) best = { c: chars[i], last: last };
-  }
-  if (!best) { w.appendChild(h('div', { class: 'widget', onclick: function () { go('s-list'); } }, h('div', { class: 'meta' }, h('div', { class: 'cap', text: '开始使用' }), h('div', { class: 'name', text: '还没有聊天' }), h('div', { class: 'last', text: '点这里去新建角色，或导入你的数据' })))); return; }
-  w.appendChild(h('div', { class: 'widget', onclick: function () { go('s-list'); openChat(best.c.id); } },
-    avatarNode(best.c.avatar, best.c.name),
-    h('div', { class: 'meta' }, h('div', { class: 'cap', text: '最近聊天 · ' + shortTime(best.last.ts) }), h('div', { class: 'name', text: best.c.name }),
-      h('div', { class: 'last', text: (best.last.role === 'user' ? '我：' : '') + msgToText(best.last).replace(/\n/g, ' ') }))));
 }
 onShow['s-home'] = renderHome;
 setInterval(function () { if ($('s-home').classList.contains('active')) renderClock(); }, 20000);
@@ -933,6 +1028,7 @@ async function openChat(cid) {
   cur = chars.find(function (c) { return c.id === cid; }) || await dbGet('characters', cid);
   refreshTitle(); if (selMode) exitSelect(); setQuote(null); $('input').placeholder = cur.offlineMode ? '写下你的动作或对白…' : '说点什么…';
   var page = await pageMessages(cid, null, PAGE);
+  applyChatLook();
   $('msgs').innerHTML = ''; oldest = null; lastShownTs = 0;
   renderPage(page, false);
   go('s-chat');
@@ -1141,7 +1237,7 @@ async function buildPrompt(char) {
   var allBooks = await dbAll('worldBooks');
   var books = allBooks.filter(function (b) { return (char.worldBookIds || []).indexOf(b.id) !== -1; });
   var entries = triggeredEntries(books, scan, settings.worldBookMaxChars);
-  var mems = pickMemories(await dbByIndex('memories', 'byChar', char.id), settings.memoryLimit);
+  var mems = selectMemories(await dbByIndex('memories', 'byChar', char.id), history.slice(-4).map(msgToText), settings.memoryLimit).all;
   var thought = null;
   if (char.injectThought) {
     var th = (await dbAllWithKeys('thoughts')).map(function (r) { return r.value; }).filter(function (t) { return t.characterId === char.id; }).sort(function (a, b) { return b.ts - a.ts; })[0];
@@ -1217,6 +1313,7 @@ var FAB_ITEMS = [
   ['记忆', 'M5 4h11a3 3 0 0 1 3 3v13H8a3 3 0 0 1-3-3V4zM8 17h11M9 8h6', function () { go('s-memory'); }],
   ['角色设置', 'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19 12l2-1.3-2-3.4-2.3.8a7 7 0 0 0-1.7-1L14.6 4h-4l-.4 2.1a7 7 0 0 0-1.7 1l-2.3-.8-2 3.4L6 12l-2 1.3 2 3.4 2.3-.8a7 7 0 0 0 1.7 1l.4 2.1h4l.4-2.1a7 7 0 0 0 1.7-1l2.3.8 2-3.4z', function () { editChar(cur.id); }],
   ['线下模式', 'M3 11l9-7 9 7M5 10v10h14V10M10 20v-6h4v6', toggleOffline],
+  ['聊天设置', 'M4 7h9M17 7h3M4 17h3M11 17h9M13 4v6M7 14v6', function () { go('s-chatset'); }],
   ['重新生成上一轮回复', 'M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7', regenerate],
   ['清空聊天记录', 'M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v6M14 11v6', function () { confirmSheet('清空和「' + cur.name + '」的全部聊天记录？', '清空', clearChat, true); }]
 ];
@@ -1316,16 +1413,17 @@ var KIND = { summary: '总结', refined: '精炼', note: '记忆' };
 async function renderMemory() {
   $('mem-title').textContent = cur.name + ' · 记忆';
   var mems = (await dbByIndex('memories', 'byChar', cur.id)).sort(function (a, b) { return b.ts - a.ts; });
-  var injected = {}; pickMemories(mems, settings.memoryLimit).forEach(function (m) { injected[m.id] = true; });
+  var layer = selectMemories(mems, [], settings.memoryLimit), injected = {};
+  layer.core.forEach(function (m) { injected[m.id] = '常驻'; }); layer.recent.forEach(function (m) { injected[m.id] = '近期'; });
   var body = $('mem-body'); body.innerHTML = '';
-  body.appendChild(h('div', { class: 'group-title', text: '带「已带入」标记的会放进每次的提示词；其余仅保存。共 ' + mems.length + ' 条' }));
+  body.appendChild(h('div', { class: 'group-title', text: '三层记忆：「常驻」和最近 ' + settings.memoryLimit + ' 条（近期）每次都带；更早的历史记忆只有聊天里出现相关关键词时才带入。共 ' + mems.length + ' 条' }));
   if (!mems.length) { body.appendChild(h('div', { class: 'empty', text: '还没有记忆。点「总结」手动生成，或在角色设置里开启自动总结。' })); return; }
   var g = h('div', { class: 'group' });
   mems.forEach(function (m) {
     g.appendChild(h('div', { class: 'item', onclick: function () { editMemory(m); } },
       h('div', { class: 't' }, h('b', { text: fmtTime(m.ts).replace(/:\d\d$/, '') }),
         h('span', { class: 'badge' + (m.kind === 'refined' ? ' acc' : ''), text: KIND[m.kind] || m.kind }),
-        injected[m.id] ? h('span', { class: 'badge on', text: '已带入' }) : null),
+        injected[m.id] ? h('span', { class: 'badge on', text: injected[m.id] }) : null),
       h('div', { class: 'c', text: m.content })));
   });
   body.appendChild(g);
@@ -1334,14 +1432,18 @@ onShow['s-memory'] = renderMemory;
 function editMemory(m) {
   textSheet('编辑记忆', m.content, [
     { text: '保存', cls: 'primary', fn: async function (v) { m.content = v; await dbPut('memories', m); renderMemory(); } },
+    { text: m.core ? '取消常驻' : '设为常驻', fn: async function (v) { m.content = v; m.core = !m.core; if (!m.core) delete m.core; await dbPut('memories', m); renderMemory(); toast(m.core ? '已设为常驻，每次都会带入' : '已取消常驻'); } },
     { text: '删除', cls: 'danger', fn: async function () { await dbDel('memories', m.id); renderMemory(); } },
     { text: '取消' }]);
 }
 $('b-mem-add').onclick = function () {
-  textSheet('新增记忆', '', [{ text: '保存', cls: 'primary', fn: async function (v) {
+  function add(core) { return async function (v) {
     if (!v.trim()) return;
-    await dbPut('memories', { id: uid('mem'), characterId: cur.id, content: v.trim(), ts: Date.now(), kind: 'note' }); renderMemory();
-  } }, { text: '取消' }], '手动记忆会一直带入提示词。');
+    var m = { id: uid('mem'), characterId: cur.id, content: v.trim(), ts: Date.now(), kind: 'note' }; if (core) m.core = true;
+    await dbPut('memories', m); renderMemory();
+  }; }
+  textSheet('新增记忆', '', [{ text: '保存', cls: 'primary', fn: add(false) }, { text: '保存为常驻', fn: add(true) }, { text: '取消' }],
+    '普通记忆在聊天里出现相关关键词时才会带入；「常驻」的记忆每次都带（适合核心设定和底线规则）。');
 };
 async function summarizeNow(char, silent) {
   var since = char.lastSummaryTs || 0;
@@ -1511,6 +1613,86 @@ $('b-char-save').onclick = async function () {
  * 想改默认方案：只改下面 THEMES 里的颜色就行。
  * vars 里的名字 = 页面 CSS 变量（bg 背景 / card 卡片 / ink 文字 / sub 次要文字 / line 分割线 / accent 主色 / me 我的气泡 / them 对方气泡）。
  * 'default' 是原样（跟随系统深浅色），不要删。 */
+/* 选图 -> 压缩成 jpeg 数据（避免撑爆存储） */
+function pickImage(maxDim, quality, cb) {
+  var f = h('input', { type: 'file', accept: 'image/*' });
+  f.addEventListener('change', function () {
+    var file = f.files[0]; if (!file) return;
+    var url = URL.createObjectURL(file), img = new Image();
+    img.onload = function () {
+      var k = Math.min(1, maxDim / Math.max(img.width, img.height)), c = document.createElement('canvas');
+      c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
+      var g = c.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height); g.drawImage(img, 0, 0, c.width, c.height);
+      URL.revokeObjectURL(url);
+      var out = c.toDataURL('image/jpeg', quality);
+      toast('已压缩：' + (file.size / 1024).toFixed(0) + 'KB → ' + (out.length * 0.75 / 1024).toFixed(0) + 'KB');
+      cb(out);
+    };
+    img.onerror = function () { toast('图片读取失败'); };
+    img.src = url;
+  });
+  f.click();
+}
+/* 聊天页外观（每个角色自己的背景 / 字号 / 气泡 CSS） */
+function applyChatLook() {
+  var c = cur || {}, st = document.getElementById('chat-look');
+  if (!st) { st = document.createElement('style'); st.id = 'chat-look'; document.head.appendChild(st); }
+  var fs = Number(c.chatFontSize) || 0, css = '';
+  if (fs) css += '#msgs .bubble{font-size:' + fs + 'px}#msgs .bubble.offline{font-size:' + (fs - 0.5) + 'px}\n';
+  st.textContent = css + (c.bubbleCss || '');
+  $('msgs').style.backgroundImage = c.chatBg ? 'url("' + c.chatBg + '")' : '';
+}
+function clearChatLook() { var st = document.getElementById('chat-look'); if (st) st.textContent = ''; $('msgs').style.backgroundImage = ''; }
+async function saveCur() { await dbPut('characters', cur); var ix = chars.findIndex(function (x) { return x.id === cur.id; }); if (ix >= 0) chars[ix] = cur; }
+/* token 估算：中文约 1.3/字，其余约 0.3/字符（不同模型的分词不同，仅供参考） */
+function estTokens(s) {
+  s = String(s || ''); var cjk = (s.match(/[\u3400-\u9fff\uff00-\uffef\u3000-\u303f]/g) || []).length;
+  return Math.round(cjk * 1.3 + (s.length - cjk) * 0.3);
+}
+async function renderTokenCard(host) {
+  host.innerHTML = ''; host.appendChild(h('h4', { text: '提示词占用（估算）' }));
+  var info = h('div', { class: 'bt-hint', text: '计算中…' }); host.appendChild(info);
+  try {
+    var p = await buildPrompt(cur), parts = [];
+    p.system.split(/\n\n(?=# )/).forEach(function (sec, i) {
+      var m = sec.match(/^# ([^\n]*)/); parts.push({ name: m ? m[1].replace(/（.*$/, '') : '开头（身份说明）', n: estTokens(sec) });
+    });
+    var hist = p.messages.reduce(function (n, m) { return n + estTokens(typeof m.content === 'string' ? m.content : JSON.stringify(m.content)) + 4; }, 0);
+    parts.push({ name: '聊天记录（最近 ' + p.messages.length + ' 条）', n: hist, hist: true });
+    var total = parts.reduce(function (n, x) { return n + x.n; }, 0) || 1;
+    info.remove();
+    host.appendChild(h('div', { style: 'font-size:22px;font-weight:700;margin:2px 0 8px', text: '约 ' + total + ' tokens' }));
+    parts.sort(function (a, b) { return b.n - a.n; }).forEach(function (x) {
+      var pct = Math.round(x.n / total * 100), bar = h('div', { style: 'height:6px;border-radius:3px;background:var(--accent);opacity:' + (x.hist ? '.45' : '.9') + ';width:' + Math.max(2, pct) + '%' });
+      host.appendChild(h('div', { style: 'margin:7px 0' }, h('div', { style: 'display:flex;justify-content:space-between;font-size:13px' }, h('span', { text: x.name }), h('span', { style: 'color:var(--sub)', text: x.n + '（' + pct + '%）' })), bar));
+    });
+    host.appendChild(h('div', { class: 'bt-hint', text: '这是发给模型的输入部分，不含它的回复。按中文约 1.3 token/字估算，实际以你的模型分词为准。想降低就缩小「近期记忆窗口」、精炼记忆或减少上下文条数。' }));
+    host.appendChild(h('button', { class: 'btn', style: 'margin-top:8px', text: '重新计算', onclick: function () { renderTokenCard(host); } }));
+  } catch (e) { info.textContent = '计算失败：' + e.message; }
+}
+onShow['s-chatset'] = function () {
+  var body = $('chatset-body'); body.innerHTML = '';
+  var tokHost = h('div', { class: 'glass' }); body.appendChild(tokHost); renderTokenCard(tokHost);
+  var prev = h('div', { class: 'bg-prev', text: cur.chatBg ? '' : '未设置背景' });
+  if (cur.chatBg) prev.style.backgroundImage = 'url("' + cur.chatBg + '")';
+  body.appendChild(h('div', { class: 'glass' }, h('h4', { text: '聊天背景（只对「' + cur.name + '」生效）' }), prev,
+    h('div', { class: 'btn-row' },
+      h('button', { class: 'btn primary', text: '上传图片', onclick: function () { pickImage(1280, 0.75, async function (d) { cur.chatBg = d; await saveCur(); applyChatLook(); onShow['s-chatset'](); }); } }),
+      h('button', { class: 'btn', text: '清除', onclick: async function () { cur.chatBg = ''; await saveCur(); applyChatLook(); onShow['s-chatset'](); } }))));
+  var fsv = h('span', { class: 'val', text: (cur.chatFontSize || 15) + 'px' });
+  var fr = h('input', { type: 'range', min: '12', max: '22', step: '1', value: String(cur.chatFontSize || 15) });
+  fr.addEventListener('input', function () { fsv.textContent = fr.value + 'px'; });
+  fr.addEventListener('change', async function () { cur.chatFontSize = Number(fr.value); await saveCur(); applyChatLook(); });
+  var fl = field('气泡字体大小', fr); fl.firstChild.appendChild(fsv);
+  body.appendChild(h('div', { class: 'glass' }, fl, h('button', { class: 'btn', text: '恢复默认', onclick: async function () { cur.chatFontSize = 0; await saveCur(); applyChatLook(); onShow['s-chatset'](); } })));
+  var ta = h('textarea', { id: 'beauty-css', spellcheck: 'false', placeholder: '/* 例：.row:not(.me) .bubble { background: rgba(255,255,255,.6); border-radius: 8px; } */' });
+  ta.value = cur.bubbleCss || '';
+  body.appendChild(h('div', { class: 'glass' }, h('h4', { text: '气泡自定义 CSS（只对这个角色的聊天页生效）' }), ta,
+    h('div', { class: 'btn-row', style: 'margin-top:10px' },
+      h('button', { class: 'btn primary', text: '应用并保存', onclick: async function () { cur.bubbleCss = ta.value; await saveCur(); applyChatLook(); toast('已应用'); } }),
+      h('button', { class: 'btn', text: '清空', onclick: async function () { ta.value = ''; cur.bubbleCss = ''; await saveCur(); applyChatLook(); } })),
+    h('div', { class: 'bt-hint', text: '常用选择器：.bubble 气泡、.row.me 我的消息、.row:not(.me) 对方消息、.bubble.offline 线下长文、.sysline 提示行、#msgs 聊天区' })));
+};
 var THEMES = [
   { id: 'default', name: '默认（暖橙）', vars: null, sw: ['#f6f5f2', '#c4572a', '#f3d9cb'] },
   { id: 'mist', name: '雾蓝', vars: { bg: '#eef2f6', card: '#ffffff', ink: '#1f2a37', sub: '#6b7a8c', line: '#dbe3ec', accent: '#3d6fb0', 'accent-ink': '#ffffff', me: '#cfe1f5', them: '#ffffff' } },
@@ -1526,6 +1708,12 @@ function applyTheme() {
   if (t && t.vars) {
     css += ':root{' + Object.keys(t.vars).map(function (k) { return '--' + k + ':' + t.vars[k] + ';'; }).join('') + '}\n';
     var m = document.querySelector('meta[name=theme-color]'); if (m) m.setAttribute('content', t.vars.bg);
+  }
+  if (settings.homeBg) css += '#s-home{background-image:url("' + settings.homeBg + '");background-size:cover;background-position:center}\n';
+  var fsrc = settings.fontData || settings.fontUrl;
+  if (fsrc) {
+    css += "@font-face{font-family:'UserFont';src:url('" + String(fsrc).replace(/'/g, '%27') + "');font-display:swap}\n" +
+      "html,body,button,input,textarea,select,pre{font-family:'UserFont',-apple-system,BlinkMacSystemFont,'PingFang SC','Noto Sans SC',sans-serif !important}\n";
   }
   st.textContent = css + (settings.customCss || '');
 }
@@ -1544,6 +1732,30 @@ onShow['s-beauty'] = function () {
     grid.appendChild(c);
   });
   body.appendChild(h('div', { class: 'glass' }, h('h4', { text: '默认方案' }), grid));
+  var wp = h('div', { class: 'bg-prev', text: settings.homeBg ? '' : '未设置桌面壁纸' });
+  if (settings.homeBg) wp.style.backgroundImage = 'url("' + settings.homeBg + '")';
+  body.appendChild(h('div', { class: 'glass' }, h('h4', { text: '桌面壁纸（上传后自动压缩）' }), wp,
+    h('div', { class: 'btn-row' },
+      h('button', { class: 'btn primary', text: '上传图片', onclick: function () { pickImage(1280, 0.78, async function (d) { settings.homeBg = d; await saveSettings(); applyTheme(); onShow['s-beauty'](); }); } }),
+      h('button', { class: 'btn', text: '清除', onclick: async function () { settings.homeBg = ''; await saveSettings(); applyTheme(); onShow['s-beauty'](); } }))));
+  var fu = h('input', { type: 'text', placeholder: '字体文件网址（.ttf / .otf / .woff2）', value: settings.fontUrl || '' });
+  fu.style.cssText = 'width:100%;padding:10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);margin-bottom:8px';
+  body.appendChild(h('div', { class: 'glass' }, h('h4', { text: '字体（应用到所有页面）' }),
+    h('div', { class: 'bt-hint', style: 'margin:0 0 8px', text: settings.fontData ? '当前：已上传的字体 ' + (settings.fontName || '') : (settings.fontUrl ? '当前：网址字体' : '当前：系统默认字体') }), fu,
+    h('div', { class: 'btn-row' },
+      h('button', { class: 'btn primary', text: '应用网址', onclick: async function () { settings.fontUrl = fu.value.trim(); settings.fontData = ''; settings.fontName = ''; await saveSettings(); applyTheme(); onShow['s-beauty'](); toast(settings.fontUrl ? '已应用' : '已恢复默认'); } }),
+      h('button', { class: 'btn', text: '上传字体文件', onclick: function () {
+        var f = h('input', { type: 'file', accept: '.ttf,.otf,.woff,.woff2,font/*' });
+        f.addEventListener('change', function () {
+          var file = f.files[0]; if (!file) return;
+          if (file.size > 12 * 1048576) { toast('字体文件超过 12MB，太大了，换个精简版或用网址'); return; }
+          var rd = new FileReader(); rd.onload = async function () {
+            settings.fontData = rd.result; settings.fontName = file.name; settings.fontUrl = ''; await saveSettings(); applyTheme(); onShow['s-beauty']();
+            toast(file.size > 4 * 1048576 ? '已应用（字体较大，加载可能偏慢）' : '已应用');
+          }; rd.readAsDataURL(file);
+        }); f.click();
+      } }),
+      h('button', { class: 'btn', text: '恢复默认', onclick: async function () { settings.fontUrl = ''; settings.fontData = ''; settings.fontName = ''; await saveSettings(); applyTheme(); onShow['s-beauty'](); } }))));
   var ta = h('textarea', { id: 'beauty-css', placeholder: '/* 例：把对方气泡改成半透明、圆角小一点 */\n.row:not(.me) .bubble { background: rgba(255,255,255,.6); border-radius: 8px; }', spellcheck: 'false' });
   ta.value = settings.customCss || '';
   body.appendChild(h('div', { class: 'glass' }, h('h4', { text: '自定义美化 CSS' }), ta,
@@ -1668,7 +1880,8 @@ function buildSettings() {
   body.appendChild(h('div', { class: 'group-title', text: '上下文' }));
   body.appendChild(h('div', { class: 'group' },
     txt('defaultContext', '默认带最近多少条消息', 'number', '30', '角色设置里可以单独覆盖'),
-    txt('memoryLimit', '最多带入多少条记忆', 'number', '20'),
+    txt('summaryMax', '每条总结的字数上限（越小越省 token）', 'number', '200'),
+    txt('memoryLimit', '近期记忆窗口（最近多少条记忆每次都带）', 'number', '20'),
     txt('scanDepth', '世界书扫描最近几条消息', 'number', '5'),
     txt('worldBookMaxChars', '世界书最多带入多少字', 'number', '6000'),
     txt('stickerPromptLimit', '提示词里最多列出多少个表情包', 'number', '60', '表情包很多时会随机抽取这么多告诉角色，避免提示词太长')));
@@ -1676,9 +1889,128 @@ function buildSettings() {
 onShow['s-settings'] = function () { draft = JSON.parse(JSON.stringify(settings)); settingsDirty = false; buildSettings(); };
 $('b-set-save').onclick = async function () { await commitSettings(); toast('已保存'); };
 
+/* ---------- 世界书导入导出：json / txt / Word(docx) ---------- */
+var CRC_T = null;
+function crc32(u8) {
+  if (!CRC_T) { CRC_T = []; for (var n = 0; n < 256; n++) { var c = n; for (var k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; CRC_T[n] = c >>> 0; } }
+  var crc = 0xFFFFFFFF; for (var i = 0; i < u8.length; i++) crc = CRC_T[(crc ^ u8[i]) & 255] ^ (crc >>> 8);
+  return (crc ^ 0xFFFFFFFF) >>> 0;
+}
+function zipStore(files) {
+  var enc = new TextEncoder(), parts = [], cd = [], off = 0;
+  files.forEach(function (f) {
+    var name = enc.encode(f.name), data = enc.encode(f.text), crc = crc32(data);
+    var lh = new DataView(new ArrayBuffer(30)); lh.setUint32(0, 0x04034b50, true); lh.setUint16(4, 20, true); lh.setUint16(6, 0x0800, true);
+    lh.setUint32(14, crc, true); lh.setUint32(18, data.length, true); lh.setUint32(22, data.length, true); lh.setUint16(26, name.length, true);
+    var ch = new DataView(new ArrayBuffer(46)); ch.setUint32(0, 0x02014b50, true); ch.setUint16(4, 20, true); ch.setUint16(6, 20, true); ch.setUint16(8, 0x0800, true);
+    ch.setUint32(16, crc, true); ch.setUint32(20, data.length, true); ch.setUint32(24, data.length, true); ch.setUint16(28, name.length, true); ch.setUint32(42, off, true);
+    parts.push(new Uint8Array(lh.buffer), name, data); cd.push(new Uint8Array(ch.buffer), name);
+    off += 30 + name.length + data.length;
+  });
+  var cdLen = cd.reduce(function (n, p) { return n + p.length; }, 0);
+  var end = new DataView(new ArrayBuffer(22)); end.setUint32(0, 0x06054b50, true); end.setUint16(8, files.length, true); end.setUint16(10, files.length, true); end.setUint32(12, cdLen, true); end.setUint32(16, off, true);
+  return new Blob(parts.concat(cd, [new Uint8Array(end.buffer)]), { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
+}
+function xmlEsc(t) { return String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+function makeDocx(text) {
+  var paras = text.split('\n').map(function (l) { return '<w:p><w:r><w:t xml:space="preserve">' + xmlEsc(l) + '</w:t></w:r></w:p>'; }).join('');
+  return zipStore([
+    { name: '[Content_Types].xml', text: '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>' },
+    { name: '_rels/.rels', text: '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>' },
+    { name: 'word/document.xml', text: '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>' + paras + '</w:body></w:document>' }
+  ]);
+}
+async function readDocxText(buf) {
+  var u8 = new Uint8Array(buf), dv = new DataView(buf), e = -1;
+  for (var i = u8.length - 22; i >= 0; i--) if (dv.getUint32(i, true) === 0x06054b50) { e = i; break; }
+  if (e < 0) throw new Error('不是有效的 Word 文件');
+  var cnt = dv.getUint16(e + 10, true), p = dv.getUint32(e + 16, true), dec = new TextDecoder();
+  for (var n = 0; n < cnt; n++) {
+    var method = dv.getUint16(p + 10, true), csize = dv.getUint32(p + 20, true), nl = dv.getUint16(p + 28, true), el = dv.getUint16(p + 30, true), cl = dv.getUint16(p + 32, true), lo = dv.getUint32(p + 42, true);
+    var name = dec.decode(u8.subarray(p + 46, p + 46 + nl));
+    if (name === 'word/document.xml') {
+      var ds = lo + 30 + dv.getUint16(lo + 26, true) + dv.getUint16(lo + 28, true), raw = u8.subarray(ds, ds + csize), xml;
+      if (method === 0) xml = dec.decode(raw);
+      else if (method === 8 && typeof DecompressionStream !== 'undefined') {
+        var stream = new Blob([raw]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
+        xml = dec.decode(await new Response(stream).arrayBuffer());
+      } else throw new Error('这个浏览器不支持读取 Word 压缩内容，请另存为 txt 再导入');
+      return xml.split(/<w:p[ >]/).slice(1).map(function (para) {
+        var t = para.replace(/<w:br\s*\/>/g, '\n').replace(/<w:tab\s*\/>/g, '\t').replace(/<w:t[^>]*>([\s\S]*?)<\/w:t>/g, '\u0001$1\u0002').replace(/<[^>]+>/g, '');
+        return t.replace(/\u0002\u0001/g, '').replace(/[\u0001\u0002]/g, '').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, '&');
+      }).join('\n');
+    }
+    p += 46 + nl + el + cl;
+  }
+  throw new Error('Word 文件里找不到正文');
+}
+function wbToText(books) {
+  return books.map(function (b) {
+    return '# ' + (b.name || '未命名') + '\n\n' + (b.entries || []).map(function (e) {
+      return '## ' + (e.title || '') + '\n' + ((e.keys || []).length ? '关键词：' + e.keys.join(',') + '\n' : '') + (e.content || '');
+    }).join('\n\n');
+  }).join('\n\n\n');
+}
+function parseWbText(text, defName) {
+  var books = [], book = null, entry = null;
+  function newBook(n) { book = { name: n, entries: [] }; books.push(book); entry = null; }
+  function newEntry(t) { if (!book) newBook(defName); entry = { title: t, keys: [], content: '', enabled: true, _n: 0 }; book.entries.push(entry); }
+  String(text).replace(/\r/g, '').split('\n').forEach(function (ln) {
+    var m;
+    if ((m = ln.match(/^#\s+(.+)$/))) newBook(m[1].trim());
+    else if ((m = ln.match(/^##\s*(.*)$/))) newEntry(m[1].trim());
+    else if (entry && entry._n === 0 && (m = ln.match(/^(?:关键词|keys)\s*[:：]\s*(.*)$/i))) { entry.keys = m[1].split(/[,，、]/).map(function (x) { return x.trim(); }).filter(Boolean); }
+    else { if (!entry) { if (!ln.trim()) return; newEntry(''); } entry.content += (entry._n ? '\n' : '') + ln; entry._n++; }
+  });
+  books.forEach(function (b) { b.entries = b.entries.filter(function (e) { return e.content.trim() || e.title; }).map(function (e) { delete e._n; e.content = e.content.replace(/\s+$/, ''); return e; }); });
+  return books.filter(function (b) { return b.entries.length; });
+}
+function normalizeWbJson(data, defName) {
+  var list = Array.isArray(data) ? data : (data && data.worldBooks) ? data.worldBooks : (data && data.entries) ? [data] : null;
+  if (!list) throw new Error('JSON 里找不到世界书（需要 worldBooks 数组，或带 entries 的对象）');
+  return list.map(function (b) {
+    return { name: b.name || defName, entries: (Array.isArray(b.entries) ? b.entries : []).map(function (e) {
+      return { title: e.title || e.comment || '', keys: Array.isArray(e.keys) ? e.keys : (typeof e.keys === 'string' ? e.keys.split(/[,，、]/).map(function (x) { return x.trim(); }).filter(Boolean) : []), content: e.content || '', enabled: e.enabled !== false };
+    }) };
+  }).filter(function (b) { return b.entries.length; });
+}
+function downloadBlob(name, blob) {
+  var a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name;
+  document.body.appendChild(a); a.click(); a.remove(); setTimeout(function () { URL.revokeObjectURL(a.href); }, 5000);
+}
+async function importWorldBooks() {
+  var f = h('input', { type: 'file', accept: '.json,.txt,.docx,.md,text/plain,application/json' });
+  f.addEventListener('change', async function () {
+    var file = f.files[0]; if (!file) return;
+    try {
+      var base = file.name.replace(/\.[^.]+$/, ''), ext = (file.name.match(/\.([^.]+)$/) || [])[1] || '', books;
+      ext = ext.toLowerCase();
+      if (ext === 'json') books = normalizeWbJson(JSON.parse(await file.text()), base);
+      else if (ext === 'docx') books = parseWbText(await readDocxText(await file.arrayBuffer()), base);
+      else if (ext === 'doc') throw new Error('旧版 .doc 读不了，请在 Word 里另存为 .docx 或 .txt');
+      else books = parseWbText(await file.text(), base);
+      if (!books.length) throw new Error('没有读到任何条目');
+      for (var i = 0; i < books.length; i++) await dbPut('worldBooks', { id: uid('wb'), name: books[i].name, categoryId: null, entries: books[i].entries });
+      toast('已导入 ' + books.length + ' 本世界书，共 ' + books.reduce(function (n, b) { return n + b.entries.length; }, 0) + ' 条'); renderWbList();
+    } catch (e) { openSheet([h('h3', { text: '导入失败' }), h('pre', { text: e.message }), h('button', { class: 'btn', text: '关闭', onclick: closeSheet })]); }
+  });
+  f.click();
+}
+async function exportWorldBooks() {
+  var books = await dbAll('worldBooks'); if (!books.length) { toast('还没有世界书可导出'); return; }
+  var day = new Date().toISOString().slice(0, 10);
+  openSheet([h('h3', { text: '导出全部世界书（' + books.length + ' 本）' }), h('div', { class: 'hint', style: 'font-size:12.5px;color:var(--sub);margin-bottom:8px', text: 'JSON 保留全部信息（含是否启用）；txt 和 Word 是可读格式，方便自己编辑后再导入。' }),
+    h('div', { class: 'btn-row' },
+      h('button', { class: 'btn primary', text: 'JSON', onclick: function () { closeSheet(); downloadBlob('世界书-' + day + '.json', new Blob([JSON.stringify({ format: 'myphone-v1', worldBooks: books }, null, 1)], { type: 'application/json' })); } }),
+      h('button', { class: 'btn', text: 'txt', onclick: function () { closeSheet(); downloadBlob('世界书-' + day + '.txt', new Blob([wbToText(books)], { type: 'text/plain' })); } }),
+      h('button', { class: 'btn', text: 'Word', onclick: function () { closeSheet(); downloadBlob('世界书-' + day + '.docx', makeDocx(wbToText(books))); } }),
+      h('button', { class: 'btn', text: '取消', onclick: closeSheet }))]);
+}
+
 /* ---------- 世界书 ---------- */
 async function renderWbList() {
   var books = await dbAll('worldBooks'), body = $('wblist-body'); body.innerHTML = '';
+  body.appendChild(h('div', { class: 'btn-row', style: 'margin-bottom:10px' }, h('button', { class: 'btn', text: '导入（json / txt / Word）', onclick: importWorldBooks }), h('button', { class: 'btn', text: '导出', onclick: exportWorldBooks })));
   if (!books.length) { body.appendChild(h('div', { class: 'empty', text: '还没有世界书。点右上角新建。\n关键词留空的条目会一直带入；填了关键词的条目，聊天里出现关键词才带入。' })); body.firstChild.style.whiteSpace = 'pre-line'; return; }
   var g = h('div', { class: 'group' });
   books.forEach(function (b) {
