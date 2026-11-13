@@ -48,9 +48,9 @@
   /* —— 底栏 Dock（悬浮那条） —— */
   --dock-left:14px;      /* 距屏幕左边（越大越往右收） */
   --dock-right:14px;     /* 距屏幕右边 */
-  --dock-bottom:50px;    /* 距屏幕底部（越大越往上） */
+  --dock-bottom:65px;    /* 距屏幕底部（越大越往上） */
   --dock-pad:14px 6px 14px;  /* 内边距：上 左右 下，控制底栏高度 */
-  --dock-min-h:96px;     /* 底栏最小高度（底栏图标拖空时也保持这个高度） */
+  --dock-min-h:80px;     /* 底栏最小高度（底栏图标拖空时也保持这个高度） */
   --dock-radius:32px;    /* 底栏圆角 */
   --dock-shadow:0 6px 18px rgba(0,0,0,.2); /* 底栏阴影，改成 none 去掉 */
 }
