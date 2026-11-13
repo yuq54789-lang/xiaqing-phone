@@ -577,7 +577,7 @@ var APPS = [
     tap: function () { toast('网易云音乐（一起听歌）还在开发中'); } },
   { name: '看手机', img:'https://i.imgs.ovh/2026/11/12/79c9fc0024948a5505778c43d91a6bfd.jpg', color: '#2f6f8f', icon: 'M8 3h8a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H8a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1zM11 18h2M9.5 11.5C10.5 9.8 11.3 9.3 12 9.3s1.5.5 2.5 2.2c-1 1.7-1.8 2.2-2.5 2.2s-1.5-.5-2.5-2.2z',
     tap: function () { toast('看手机还在开发中'); } },
-  { name: '预设', color: '#7a6aa8', icon: 'M6 3h9l4 4v14H6zM14 3v5h5M9 12h7M9 16h7',   /* 想换图标图片：在这里加 img:'图片网址' */
+  { name: '预设', img:'https://i.imgs.ovh/2026/11/13/3229023eb35714f0bc0f86dd89d6061f.jpg', color: '#7a6aa8', icon: 'M6 3h9l4 4v14H6zM14 3v5h5M9 12h7M9 16h7',   /* 想换图标图片：在这里加 img:'图片网址' */
     tap: function () { go('s-prlist'); } }
 ];
 function pickCharThen(title, fn) {
