@@ -5,7 +5,7 @@
  * ===================================================================== */
 
 /* ---------- ① 数据库（原生 IndexedDB，无需外部库） ---------- */
-var DB_NAME = 'myphone', DB_VER = 2, db = null;
+var DB_NAME = 'myphone', DB_VER = 3, db = null;
 var STORES = {
   characters: { keyPath: 'id' },
   messages: { keyPath: 'id', index: [['byChar', ['characterId', 'ts', 'id']]] },
@@ -15,6 +15,7 @@ var STORES = {
   worldBookCategories: { keyPath: 'id' },
   userPersonas: { keyPath: 'id' },
   offlinePresets: { keyPath: 'id' },   /* 线下模式写作预设 */
+  beautyPresets: { keyPath: 'id' },    /* 美化预设 */
   stickers: { keyPath: 'id' },
   stickerCategories: { keyPath: 'id' },
   settings: { keyPath: 'key' }
@@ -101,9 +102,13 @@ var DEFAULTS = {
   baseUrl: '', apiKey: '', model: '', temperature: 0.8,
   stream: false, themeId: 'default', customCss: '', homeBg: '', fontUrl: '', fontData: '', fontName: '',
   secBaseUrl: '', secApiKey: '', secModel: '',
-  scanDepth: 5, worldBookMaxChars: 6000, memoryLimit: 20, summaryMax: 200, defaultContext: 30, stickerPromptLimit: 60, autoReply: false, apiPresets: [], activePresetId: null, weather: null, homeLayout: null
+  scanDepth: 5, worldBookMaxChars: 6000, memoryLimit: 20, summaryMax: 200, defaultContext: 30, stickerPromptLimit: 60, autoReply: false, apiPresets: [], activePresetId: null, weather: null, homeLayout: null,
+  bubbleSlow: 1,                 /* 气泡出现速度倍数：1=默认，越大越慢 */
+  notifyUrl: '', notifyName: '', /* 消息提示音（网址 / 上传的文件名） */
+  iconUrls: {}                   /* 自定义桌面图标：{ 应用名: 图片网址或 data URI } */
 };
 var settings = Object.assign({}, DEFAULTS);
+var notifyFile = '';   /* 上传的提示音文件（data URI，单独存） */
 var homeBgFile = '';   /* 上传的桌面壁纸原图（单独存，不压缩） */
 async function loadSettings() {
   var row = await dbGet('settings', 'app');
@@ -248,6 +253,7 @@ function parseReplyLines(lines, pool) {
 function msgToText(m) {
   var t = m.type || 'text', meta = m.meta || {}, c = m.content || '';
   if (t === 'sticker') return '[表情包：' + (meta.meaning || '无描述') + ']';
+  if (t === 'image') return '[用户发送了一张图片]';   /* 历史里的图片一律变成这行文字：省 token，也不占算力 */
   if (t === 'transfer') return '[转账 ' + (meta.amount != null ? '¥' + meta.amount : '') + (meta.note ? '，备注：' + meta.note : '') + ']';
   if (t === 'voice') return '[语音] ' + c;
   if (t === 'recalled') return '[撤回了一条消息]';
@@ -260,15 +266,31 @@ function msgToText(m) {
 }
 
 /* 历史 -> API 消息：system 当作 user 提示，连续同角色的合并成一条 */
-function toApiMessages(history) {
+function imgUsable(u) { return /^data:image\//.test(u || ''); }
+function addText(item, text) {
+  if (typeof item.content === 'string') { item.content = item.content ? item.content + '\n' + text : text; return; }
+  var p = item.content[item.content.length - 1];
+  if (p && p.type === 'text') p.text += '\n' + text; else item.content.push({ type: 'text', text: text });
+}
+function addImage(item, url) {
+  if (typeof item.content === 'string') item.content = item.content ? [{ type: 'text', text: item.content }] : [];
+  item.content.push({ type: 'text', text: '[用户发来一张图片]' }, { type: 'image_url', image_url: { url: url } });
+}
+/* 只有「还没被角色回复过」的那一轮里的图片才会真的发给模型；
+ * 角色回复之后，这些图片在请求里自动变成文字「[用户发送了一张图片]」，聊天界面里图片照常显示。 */
+function toApiMessages(history, opt) {
+  opt = opt || {};
+  var lastA = -1;
+  history.forEach(function (m, i) { if (m.role === 'assistant' && !m.hidden && m.type !== 'pat' && m.type !== 'system') lastA = i; });
   var out = [];
-  history.forEach(function (m) {
+  history.forEach(function (m, i) {
     var role = m.role === 'assistant' ? 'assistant' : 'user';
-    var text = msgToText(m);
-    if (!text) return;
+    var asImage = m.type === 'image' && role === 'user' && opt.images !== false && i > lastA && imgUsable(m.content);
+    var text = asImage ? '' : msgToText(m);
+    if (!asImage && !text) return;
     var last = out[out.length - 1];
-    if (last && last.role === role) last.content += '\n' + text;
-    else out.push({ role: role, content: text });
+    if (!last || last.role !== role) { last = { role: role, content: '' }; out.push(last); }
+    if (asImage) addImage(last, m.content); else addText(last, text);
   });
   return out;
 }
@@ -328,13 +350,23 @@ async function readSSE(res, onData) {
  * 统一调用入口。opts: {base,key,model,temperature,system,messages,stream,onDelta,signal}
  * 返回完整回复文字。流式时每收到一块就调用 onDelta(目前为止的全文)。
  */
+function geminiParts(c) {
+  if (typeof c === 'string') return [{ text: c }];
+  return c.map(function (p) {
+    if (p.type === 'image_url') {
+      var m = /^data:([^;]+);base64,([\s\S]*)$/.exec((p.image_url && p.image_url.url) || '');
+      return m ? { inlineData: { mimeType: m[1], data: m[2] } } : { text: '[图片]' };
+    }
+    return { text: p.text || '' };
+  });
+}
 async function callLLM(o) {
   var gem = isGemini(o.base), url, headers = { 'Content-Type': 'application/json' }, body;
   if (!o.base || !o.model) throw new Error('请先在「设置」里填写反代地址和模型');
   if (gem) {
     var root = String(o.base).trim().replace(/\/+$/, '').replace(/\/v1(beta)?(\/models)?$/, '');
     url = root + '/v1beta/models/' + encodeURIComponent(o.model) + (o.stream ? ':streamGenerateContent?alt=sse&' : ':generateContent?') + 'key=' + encodeURIComponent(o.key || '');
-    var contents = o.messages.map(function (m) { return { role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.content }] }; });
+    var contents = o.messages.map(function (m) { return { role: m.role === 'assistant' ? 'model' : 'user', parts: geminiParts(m.content) }; });
     if (!contents.length || contents[0].role !== 'user') contents.unshift({ role: 'user', parts: [{ text: '（开始）' }] });
     body = { systemInstruction: { parts: [{ text: o.system }] }, contents: contents, generationConfig: { temperature: o.temperature } };
   } else {
@@ -663,10 +695,11 @@ var DOCK_NAMES = ['聊天', '记忆', '世界书', '表情包'];
 function appBtn(a) {
   var tile = h('div', { class: 'tile', style: 'background:' + a.color }, appIcon(a.icon));
   var b = h('button', { class: 'app', 'data-id': a.name, onclick: a.tap, 'aria-label': a.name }, tile, h('span', { text: a.name }));
-  if (a.img) {
+  var iconSrc = (settings.iconUrls && settings.iconUrls[a.name]) || a.img;   /* 美化里自定义的图标优先 */
+  if (iconSrc) {
     var im = new Image(); im.alt = ''; im.draggable = false;
     im.onload = function () { tile.innerHTML = ''; tile.classList.add('img'); tile.appendChild(im); };   /* 图片加载成功才替换，失败就保留默认图标 */
-    im.src = a.img;
+    im.src = iconSrc;
   }
   return b;
 }
@@ -690,8 +723,8 @@ function resolveLayout() {
   var def = defaultLayout(), sv = settings.homeLayout;
   if (!sv) return def;
   var all = {}, used = {}; def.grid.concat(def.dock).forEach(function (id) { all[id] = 1; });
-  function clean(list) { var out = []; (list || []).forEach(function (id) { if (all[id] && !used[id]) { used[id] = 1; out.push(id); } }); return out; }
-  var dock = clean(sv.dock), grid = clean(sv.grid);
+  function clean(list) { var out = []; (list || []).forEach(function (id) { if (id === 'empty') { out.push(id); return; } if (all[id] && !used[id]) { used[id] = 1; out.push(id); } }); return out; }   /* 'empty' = 桌面上留的空格 */
+  var dock = clean(sv.dock).filter(function (id) { return id !== 'empty'; }), grid = clean(sv.grid);
   def.grid.concat(def.dock).forEach(function (id) { if (!used[id]) grid.push(id); });   /* 以后新增的图标自动补到最后 */
   return { dock: dock, grid: grid };
 }
@@ -701,22 +734,28 @@ async function renderHome() {
   var grid = $('app-grid'), dock = $('dock'); grid.innerHTML = ''; dock.innerHTML = '';
   var byName = {}; APPS.forEach(function (a) { byName[a.name] = a; });
   var L = resolveLayout();
-  function node(id) { return (id === 'widgetA' || id === 'widgetB') ? photoWidget(id) : (byName[id] ? appBtn(byName[id]) : null); }
+  function node(id) { if (id === 'empty') return slotNode(); return (id === 'widgetA' || id === 'widgetB') ? photoWidget(id) : (byName[id] ? appBtn(byName[id]) : null); }
   L.dock.forEach(function (id) { var n = node(id); if (n) { dock.appendChild(n); bindHomeDrag(n); } });
-  L.grid.forEach(function (id) { var n = node(id); if (n) { grid.appendChild(n); bindHomeDrag(n); } });
+  L.grid.forEach(function (id) { var n = node(id); if (n) { grid.appendChild(n); if (id !== 'empty') bindHomeDrag(n); } });
   chars = await dbAll('characters');
 }
 onShow['s-home'] = renderHome;
 
 /* ---- 长按图标 → 进入编辑模式，拖动调整位置（桌面格子 ⇄ 底栏 可互相拖；底栏最多 4 个，照片组件不能进底栏） ---- */
 var editMode = false, dragState = null, suppressClick = false;
+/* 空格：桌面上留空的一个格子（和图标一样大，编辑时显示虚线框，可以把图标放进来） */
+function slotNode() { return h('div', { class: 'app slot', 'data-id': 'empty', 'aria-hidden': 'true' }, h('div', { class: 'tile' }), h('span', { text: ' ' })); }
+function trimTailSlots() { var g = $('app-grid'); while (g.lastElementChild && g.lastElementChild.classList.contains('slot')) g.lastElementChild.remove(); }
 function setEdit(on, skipSave) {
   editMode = on; $('s-home').classList.toggle('editing', on); $('home-edit').hidden = !on;
-  if (!on && !skipSave) saveHomeLayout();
+  trimTailSlots();
+  if (on) { for (var i = 0; i < 4; i++) $('app-grid').appendChild(slotNode()); }   /* 编辑时多给一排空格，方便放到最后面 */
+  else if (!skipSave) saveHomeLayout();
 }
 function saveHomeLayout() {
   var ids = function (box) { return Array.prototype.map.call(box.children, function (el) { return el.getAttribute('data-id'); }).filter(Boolean); };
-  settings.homeLayout = { grid: ids($('app-grid')), dock: ids($('dock')) };
+  var g = ids($('app-grid')); while (g.length && g[g.length - 1] === 'empty') g.pop();   /* 末尾的空格不用存 */
+  settings.homeLayout = { grid: g, dock: ids($('dock')).filter(function (id) { return id !== 'empty'; }) };
   return saveSettings();
 }
 function beginDrag(el, x, y) {
@@ -726,6 +765,16 @@ function beginDrag(el, x, y) {
   dragState = { el: el, clone: clone, ox: x - r.left, oy: y - r.top, box: el.parentNode, last: 0 };
   suppressClick = true;
 }
+/* 交换两个节点的位置（相邻也行） */
+function swapNodes(a, b) {
+  var mk = document.createElement('i');
+  a.parentNode.insertBefore(mk, a); b.parentNode.insertBefore(a, b); mk.parentNode.insertBefore(b, mk); mk.remove();
+}
+/* 拖动规则（像手机桌面）：
+ * ① 放到空格上 → 图标就放进这个空格，原来的位置变成空格，别的图标不动；
+ * ② 放到另一个图标上 → 两个图标互换位置；
+ * ③ 桌面 → 底栏：底栏没满就插进去（桌面原位留空格）；满了就和被放到的那个互换；
+ * ④ 照片组件只在桌面里动，不能进底栏，也不和图标互换。 */
 function dragMove(x, y) {
   var d = dragState; d.clone.style.left = (x - d.ox) + 'px'; d.clone.style.top = (y - d.oy) + 'px';
   d.px = x; d.py = y;
@@ -733,32 +782,34 @@ function dragMove(x, y) {
     if (!d.timer) d.timer = setTimeout(function () { d.timer = null; if (dragState === d) dragMove(d.px, d.py); }, 150);
     return;
   }
-  var dockEl = $('dock'), gridEl = $('app-grid'), isW = d.el.classList.contains('wdg');
+  var dockEl = $('dock'), a = d.el, isW = a.classList.contains('wdg'), fromDock = a.parentNode === dockEl;
   var under = document.elementFromPoint(x, y), tgt = under && under.closest && under.closest('#app-grid > [data-id], #dock > [data-id]');
-  var dr = dockEl.getBoundingClientRect(), box = null, before = null;
-  if (tgt) {
-    if (tgt === d.el) return;
-    box = tgt.parentNode;
-    var kids = Array.prototype.slice.call(box.children);
-    before = (box === d.el.parentNode && kids.indexOf(d.el) < kids.indexOf(tgt)) ? tgt.nextSibling : tgt;
-  } else if (x >= dr.left && x <= dr.right && y >= dr.top && y <= dr.bottom) { box = dockEl; before = null; }       /* 放到底栏空位 */
-  else if (y >= gridEl.getBoundingClientRect().top) {
-    box = gridEl; before = null;                                                                                 /* 放到桌面空位：排到最后 */
-    if (box === d.el.parentNode) { var lc = gridEl.lastElementChild; if (lc === d.el || y <= lc.getBoundingClientRect().bottom) return; }
+  var dr = dockEl.getBoundingClientRect(), inDock = x >= dr.left && x <= dr.right && y >= dr.top && y <= dr.bottom, changed = false;
+  /* 悬停到「有图标的位置」要停住 0.35 秒才换位（松手时立刻换）；经过时不会把路上的图标一路带着走。放到空格是立刻的。 */
+  var hoverKey = (tgt && tgt !== a && !tgt.classList.contains('slot')) ? tgt : ((!tgt && inDock) ? dockEl : null);
+  if (hoverKey && !d.final) {
+    if (d.hoverTgt !== hoverKey) { d.hoverTgt = hoverKey; d.hoverSince = Date.now(); }
+    var wait = 350 - (Date.now() - d.hoverSince);
+    if (wait > 0) { if (!d.timer) d.timer = setTimeout(function () { d.timer = null; if (dragState === d) dragMove(d.px, d.py); }, wait + 10); return; }
+  } else if (!hoverKey) d.hoverTgt = null;
+  if (tgt && tgt !== a) {
+    var toDock = tgt.parentNode === dockEl, tIsW = tgt.classList.contains('wdg'), tIsSlot = tgt.classList.contains('slot');
+    if (isW && (toDock || !tIsSlot && !tIsW)) return;     /* 组件：不进底栏，也不和图标互换 */
+    if (!isW && tIsW) return;                              /* 图标不能放到组件上 */
+    if (!fromDock && toDock && dockEl.children.length < 4) { a.parentNode.insertBefore(slotNode(), a); dockEl.insertBefore(a, tgt); changed = true; }
+    else { swapNodes(a, tgt); changed = true; }
+  } else if (!tgt && inDock && !fromDock && !isW && dockEl.children.length < 4) {
+    a.parentNode.insertBefore(slotNode(), a); dockEl.appendChild(a); changed = true;
   }
-  if (!box || (box === dockEl && isW)) return;                       /* 照片组件不能放进底栏 */
-  if (box === d.el.parentNode && before === null && box.lastElementChild === d.el) return;
-  box.insertBefore(d.el, before); d.box = box;
-  if (box === dockEl) {                                              /* 底栏最多 4 个：多出来的最后一个挤回桌面最前面 */
-    var apps = Array.prototype.slice.call(dockEl.children).filter(function (c) { return c !== d.el; });
-    if (apps.length > 3) gridEl.insertBefore(apps[apps.length - 1], gridEl.firstChild);
+  if (changed) {
+    Array.prototype.slice.call(dockEl.querySelectorAll('.slot')).forEach(function (e) { e.remove(); });   /* 底栏里不留空格 */
+    d.box = a.parentNode; d.last = Date.now();
   }
-  d.last = Date.now();
 }
 function endDrag() {
   var d = dragState; if (!d) return;
   if (d.timer) { clearTimeout(d.timer); d.timer = null; }
-  d.last = 0; if (d.px != null) dragMove(d.px, d.py);      /* 松手时按最后位置再落一次 */
+  d.last = 0; d.final = true; if (d.px != null) dragMove(d.px, d.py);      /* 松手时按最后位置再落一次（立刻生效） */
   dragState = null;
   d.clone.remove(); d.el.classList.remove('ph'); saveHomeLayout();
   setTimeout(function () { suppressClick = false; }, 400);
@@ -873,6 +924,13 @@ function msgNode(m) {
     img.onload = pinScroll;
     img.onerror = function () { b.innerHTML = ''; b.appendChild(h('div', { class: 'alt', text: '[表情包] ' + (meta.meaning || '') })); pinScroll(); };
     b.appendChild(img);
+  } else if (t === 'image') {
+    b = h('div', { class: 'bubble image' });
+    var pic = h('img', { src: m.content, alt: '图片' });
+    pic.onload = pinScroll;
+    pic.onerror = function () { b.innerHTML = ''; b.appendChild(h('div', { class: 'alt', text: '[图片读取失败]' })); };
+    pic.addEventListener('click', function () { if (Date.now() - lastLP > 700 && !selMode) openLightbox(m.content); });
+    b.appendChild(pic);
   } else if (t === 'transfer') {
     b = h('div', { class: 'bubble transfer' }, h('b', { text: '¥ ' + (meta.amount != null ? meta.amount : '') }), meta.note || '转账');
   } else {
@@ -916,13 +974,14 @@ async function reloadChat() {
   renderPage(await pageMessages(cur.id, null, PAGE), false); scrollBottom();
 }
 
+var lastLP = 0;   /* 最近一次长按的时间，用来避免长按后又触发点击 */
 function bindLongPress(el, fn) {
   var tm = null, sx = 0, sy = 0;
   function clear() { if (tm) { clearTimeout(tm); tm = null; } }
-  el.addEventListener('touchstart', function (e) { var t = e.touches[0]; sx = t.clientX; sy = t.clientY; clear(); tm = setTimeout(function () { tm = null; if (navigator.vibrate) try { navigator.vibrate(12); } catch (x) {} fn(); }, 480); }, { passive: true });
+  el.addEventListener('touchstart', function (e) { var t = e.touches[0]; sx = t.clientX; sy = t.clientY; clear(); tm = setTimeout(function () { tm = null; if (navigator.vibrate) try { navigator.vibrate(12); } catch (x) {} lastLP = Date.now(); fn(); }, 480); }, { passive: true });
   el.addEventListener('touchmove', function (e) { var t = e.touches[0]; if (Math.abs(t.clientX - sx) > 8 || Math.abs(t.clientY - sy) > 8) clear(); }, { passive: true });
   el.addEventListener('touchend', clear); el.addEventListener('touchcancel', clear);
-  el.addEventListener('contextmenu', function (e) { e.preventDefault(); clear(); fn(); });
+  el.addEventListener('contextmenu', function (e) { e.preventDefault(); clear(); lastLP = Date.now(); fn(); });
 }
 /* 引用 */
 var quoting = null;
@@ -956,7 +1015,7 @@ async function selectedMsgs() {
 }
 $('sel-copy').onclick = async function () {
   var ms = await selectedMsgs(); if (!ms.length) { toast('还没选消息'); return; }
-  var t = ms.map(function (m) { return (m.role === 'user' ? '我' : cur.name) + '：' + (m.content || msgToText(m)); }).join('\n');
+  var t = ms.map(function (m) { return (m.role === 'user' ? '我' : cur.name) + '：' + plainText(m); }).join('\n');
   (navigator.clipboard ? navigator.clipboard.writeText(t) : Promise.reject()).then(function () { toast('已复制 ' + ms.length + ' 条'); exitSelect(); }, function () { toast('复制失败'); });
 };
 $('sel-del').onclick = function () {
@@ -967,6 +1026,7 @@ $('sel-del').onclick = function () {
   }, true);
 };
 
+function plainText(m) { return m.type === 'image' ? msgToText(m) : (m.content || msgToText(m)); }
 function editable(m) { return !m.type || m.type === 'text' || m.type === 'voice' || m.type === 'offline'; }
 function editMessage(m) {
   textSheet('编辑消息（改完角色也会按新内容理解）', m.content, [{ text: '保存', cls: 'primary', fn: async function (v) { m.content = v; await dbPut('messages', m); reloadChat(); } }, { text: '取消' }]);
@@ -977,9 +1037,9 @@ $('sel-edit').onclick = async function () {
   exitSelect(); editMessage(m);
 };
 function messageMenu(m) {
-  var items = [['引用', function () { setQuote({ id: m.id, content: String(m.content || msgToText(m)), name: m.role === 'user' ? '我' : cur.name }); }],
+  var items = [['引用', function () { setQuote({ id: m.id, content: String(plainText(m)), name: m.role === 'user' ? '我' : cur.name }); }],
     ['选择', function () { enterSelect(m.id); }],
-    ['复制', function () { (navigator.clipboard ? navigator.clipboard.writeText(m.content || msgToText(m)) : Promise.reject()).then(function () { toast('已复制'); }, function () { toast('复制失败'); }); }]];
+    ['复制', function () { (navigator.clipboard ? navigator.clipboard.writeText(plainText(m)) : Promise.reject()).then(function () { toast('已复制'); }, function () { toast('复制失败'); }); }]];
   if (editable(m)) items.push(['编辑', function () { editMessage(m); }]);
   items.push(['删除', async function () { await dbDel('messages', m.id); reloadChat(); }]);
   menuSheet('', items);
@@ -1006,6 +1066,56 @@ $('composer').addEventListener('submit', async function (e) {
   if (settings.autoReply) generateReply(); // 默认只发送，不回复：要你点「等回复」才会回
 });
 $('b-wait').onclick = function () { generateReply(); };
+
+/* ---- 图片：压缩 / 灯箱 / 从相册发送 ---- */
+/* 压缩：长边不超过 maxDim。o.alpha=true 保留透明（输出 webp/png），否则输出 jpeg。返回 { url, w, h } */
+function compressImage(file, o) {
+  o = o || {};
+  return new Promise(function (res, rej) {
+    var u = URL.createObjectURL(file), img = new Image();
+    img.onload = function () {
+      URL.revokeObjectURL(u);
+      var k = Math.min(1, (o.maxDim || 512) / Math.max(img.width, img.height)), w = Math.max(1, Math.round(img.width * k)), hh = Math.max(1, Math.round(img.height * k));
+      var cv = document.createElement('canvas'); cv.width = w; cv.height = hh;
+      var g = cv.getContext('2d');
+      if (!o.alpha) { g.fillStyle = '#fff'; g.fillRect(0, 0, w, hh); }
+      g.drawImage(img, 0, 0, w, hh);
+      var out;
+      if (o.alpha) { out = cv.toDataURL('image/webp', o.quality || 0.8); if (out.indexOf('data:image/webp') !== 0) out = cv.toDataURL('image/png'); }
+      else out = cv.toDataURL('image/jpeg', o.quality || 0.8);
+      res({ url: out, w: w, h: hh });
+    };
+    img.onerror = function () { URL.revokeObjectURL(u); rej(new Error('这张图片读不了：' + (file.name || ''))); };
+    img.src = u;
+  });
+}
+function openLightbox(src) {
+  var o = h('div', { class: 'lightbox', onclick: function () { o.remove(); } }, h('img', { src: src, alt: '' }));
+  document.body.appendChild(o);
+}
+var IMG_SEND_MAX = 512;   /* 发给 AI 的图片：长边最多多少像素（越小越省 token）；质量 0.8 */
+$('b-image').onclick = function () {
+  if (!cur) return;
+  var f = h('input', { type: 'file', accept: 'image/*', multiple: true });
+  f.addEventListener('change', async function () {
+    var files = Array.prototype.slice.call(f.files || []).slice(0, 6); if (!files.length) return;
+    var ok = 0, bad = 0, before = 0, after = 0;
+    for (var i = 0; i < files.length; i++) {
+      try {
+        var r = await compressImage(files[i], { maxDim: IMG_SEND_MAX, quality: 0.8 });
+        var m = { id: uid(cur.id), characterId: cur.id, role: 'user', type: 'image', content: r.url, ts: Date.now() + i, meta: { w: r.w, h: r.h } };
+        await dbPut('messages', m);
+        if (lastShownTs && m.ts - lastShownTs > 600000) appendMsgNode(h('div', { class: 'sysline', text: fmtTime(m.ts).replace(/:\d\d$/, '') }));
+        var n = msgNode(m); if (n) appendMsgNode(n); lastShownTs = m.ts; scrollBottom();
+        ok++; before += files[i].size; after += r.url.length * 0.75;
+      } catch (e) { bad++; }
+    }
+    if (ok) toast('已发送 ' + ok + ' 张图片（' + Math.round(before / 1024) + 'KB → ' + Math.round(after / 1024) + 'KB）' + (bad ? '，' + bad + ' 张失败' : '') + (settings.autoReply ? '' : '。点「等回复」让 TA 看图'));
+    else toast('图片读取失败');
+    if (ok && settings.autoReply) generateReply();
+  });
+  f.click();
+};
 $('input').addEventListener('keydown', function (e) { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); $('composer').requestSubmit(); } });
 
 /* 表情包面板 */
@@ -1037,18 +1147,98 @@ async function openStickerPanel(catId, manage) {
       inChat ? h('button', { class: 'btn', text: manage ? '完成管理' : '管理', onclick: function () { openStickerPanel(catId, !manage); } }) : null,
       h('button', { class: 'btn', text: '关闭', onclick: closeSheet }))]);
 }
+function nameFromUrl(u) { try { var f = decodeURIComponent(String(u).split('?')[0].split('/').pop() || ''); return f.replace(/\.[a-z0-9]+$/i, '') || '表情'; } catch (e) { return '表情'; } }
+/* 一段文字 -> [{name,url}]。每行「名称 网址」（名称和网址之间可以是空格 / 冒号 / 逗号 / 竖线 / Tab），也认 JSON 数组 */
+function parseStickerLines(text) {
+  var t = String(text || '').replace(/\r/g, '').trim(), out = [];
+  if (t.charAt(0) === '[' || t.charAt(0) === '{') {
+    try {
+      var j = JSON.parse(t);
+      (Array.isArray(j) ? j : (j.stickers || [])).forEach(function (x) { var u = x && (x.url || x.src); if (u) out.push({ name: String(x.name || x.title || '').trim() || nameFromUrl(u), url: String(u).trim() }); });
+      if (out.length) return out;
+    } catch (e) {}
+  }
+  var clean = function (s) { return s.replace(/^\s*(?:\d+[.、)）]\s*|[-*•]\s+)/, '').replace(/[\s:：,，|｜=＝>\-—]+$/, '').replace(/^[\s:：,，|｜=＝]+/, '').trim(); };
+  t.split('\n').forEach(function (ln) {
+    ln = ln.trim(); if (!ln || ln.charAt(0) === '#') return;
+    var m = ln.match(/(https?:\/\/[^\s"'<>]+|data:image\/[^\s"'<>]+)/); if (!m) return;
+    var name = clean(ln.slice(0, m.index)) || clean(ln.slice(m.index + m[0].length)) || nameFromUrl(m[0]);
+    out.push({ name: name, url: m[0] });
+  });
+  return out;
+}
+var STK_MAX = 320;   /* 本地上传的表情包：长边最多多少像素（越小越省内存） */
+async function stickerFromFile(file) {
+  if (file.type === 'image/gif' && file.size <= 400 * 1024) {   /* 小 GIF 原样保留（保住动画） */
+    var url = await new Promise(function (res, rej) { var rd = new FileReader(); rd.onload = function () { res(rd.result); }; rd.onerror = rej; rd.readAsDataURL(file); });
+    return { url: url, kept: true };
+  }
+  var r = await compressImage(file, { maxDim: STK_MAX, quality: 0.8, alpha: /png|webp|gif/.test(file.type) });
+  return { url: r.url, kept: false, anim: file.type === 'image/gif' };
+}
+function batchStickerForm(cats, catId) {
+  var st = 'width:100%;padding:9px;border:1px solid var(--line);border-radius:8px;background:var(--bg);margin-bottom:8px';
+  var ta = h('textarea', { placeholder: '每行一个：名称 网址\n例如：\n委屈巴巴 https://xxx.com/a.png\n开心：https://xxx.com/b.gif\n也可以直接粘贴 JSON 数组', style: st + ';min-height:150px;font-size:13px' });
+  var sel = h('select', { style: st }, h('option', { value: '', text: '不分类' }));
+  cats.forEach(function (c) { sel.appendChild(h('option', { value: String(c.id), text: c.name })); });
+  if (catId !== 'all') sel.value = String(catId);
+  var info = h('div', { class: 'hint', style: 'font-size:12.5px;color:var(--sub);margin-bottom:8px', text: '网址图片不会被压缩（它存在别人的服务器上，不占你的内存）。' });
+  openSheet([h('h3', { text: '批量导入表情包' }), ta, h('button', { type: 'button', class: 'btn', style: 'width:100%;margin-bottom:8px', text: '读取 txt / Word / json 文件', onclick: function () {
+      var f = h('input', { type: 'file', accept: '.txt,.md,.json,.docx,text/plain,application/json' });
+      f.addEventListener('change', async function () {
+        var file = f.files[0]; if (!file) return;
+        try {
+          var ext = ((file.name.match(/\.([^.]+)$/) || [])[1] || '').toLowerCase();
+          if (ext === 'doc') throw new Error('旧版 .doc 读不了，请另存为 .docx 或 .txt');
+          var txt = ext === 'docx' ? await readDocxText(await file.arrayBuffer()) : await file.text();
+          ta.value = (ta.value ? ta.value.replace(/\s+$/, '') + '\n' : '') + txt; info.textContent = '已读入「' + file.name + '」，检查一下再点导入。';
+        } catch (e) { toast('读取失败：' + e.message); }
+      });
+      f.click();
+    } }), sel, info,
+    h('div', { class: 'btn-row' },
+      h('button', { class: 'btn primary', text: '导入', onclick: async function () {
+        var items = parseStickerLines(ta.value); if (!items.length) { toast('没读到任何「名称 网址」'); return; }
+        var have = {}; (await dbAll('stickers')).forEach(function (s) { have[s.url] = 1; });
+        var add = [], dup = 0;
+        items.forEach(function (it) { if (have[it.url]) { dup++; return; } have[it.url] = 1; add.push({ id: uid('sticker'), name: it.name, url: it.url, categoryId: sel.value || null }); });
+        await dbBulkPut('stickers', add);
+        toast('已导入 ' + add.length + ' 个' + (dup ? '，跳过 ' + dup + ' 个重复' : ''));
+        openStickerPanel(catId, false);
+      } }), h('button', { class: 'btn', text: '返回', onclick: function () { openStickerPanel(catId, false); } }))]);
+}
 function addStickerForm(cats, catId) {
   var name = h('input', { type: 'text', placeholder: '名称（也是让角色认识它的描述，如：委屈巴巴）', style: 'width:100%;padding:9px;border:1px solid var(--line);border-radius:8px;background:var(--bg);margin-bottom:8px' });
   var url = h('input', { type: 'text', placeholder: '图片网址 https://…', style: 'width:100%;padding:9px;border:1px solid var(--line);border-radius:8px;background:var(--bg);margin-bottom:8px' });
   var sel = h('select', { style: 'width:100%;padding:9px;border:1px solid var(--line);border-radius:8px;background:var(--bg);margin-bottom:8px' }, h('option', { value: '', text: '不分类' }));
   cats.forEach(function (c) { sel.appendChild(h('option', { value: String(c.id), text: c.name })); });
   if (catId !== 'all') sel.value = String(catId);
+  var upBtn = h('button', { type: 'button', class: 'btn', style: 'width:100%;margin-bottom:8px', text: '上传本地图片（可多选，自动压缩）', onclick: function () {
+    var f = h('input', { type: 'file', accept: 'image/*', multiple: true });
+    f.addEventListener('change', async function () {
+      var files = Array.prototype.slice.call(f.files || []); if (!files.length) return;
+      toast('正在压缩 ' + files.length + ' 张…');
+      var add = [], bad = 0, anim = 0, before = 0, after = 0;
+      for (var i = 0; i < files.length; i++) {
+        try {
+          var r = await stickerFromFile(files[i]);
+          add.push({ id: uid('sticker'), name: files[i].name.replace(/\.[^.]+$/, '') || '表情', url: r.url, categoryId: sel.value || null });
+          before += files[i].size; after += r.url.length * 0.75; if (r.anim) anim++;
+        } catch (e) { bad++; }
+      }
+      await dbBulkPut('stickers', add);
+      toast('已添加 ' + add.length + ' 张（' + Math.round(before / 1024) + 'KB → ' + Math.round(after / 1024) + 'KB）' + (bad ? '，' + bad + ' 张失败' : '') + (anim ? '，' + anim + ' 张大动图变成了静态' : ''));
+      openStickerPanel(catId, false);
+    });
+    f.click();
+  } });
   openSheet([h('h3', { text: '添加表情包' }), name, url, sel, h('div', { class: 'btn-row' },
     h('button', { class: 'btn primary', text: '添加', onclick: async function () {
       if (!name.value.trim() || !url.value.trim()) { toast('名称和网址都要填'); return; }
       await dbPut('stickers', { id: uid('sticker'), name: name.value.trim(), url: url.value.trim(), categoryId: sel.value || null });
       openStickerPanel(catId, false);
-    } }), h('button', { class: 'btn', text: '返回', onclick: function () { openStickerPanel(catId, false); } }))]);
+    } }), h('button', { class: 'btn', text: '返回', onclick: function () { openStickerPanel(catId, false); } })), upBtn,
+    h('button', { type: 'button', class: 'btn', style: 'width:100%', text: '批量导入（粘贴 / txt / Word）', onclick: function () { batchStickerForm(cats, catId); } })]);
 }
 async function sendSticker(st) {
   var m = { id: uid(cur.id), characterId: cur.id, role: 'user', type: 'sticker', content: st.url, ts: Date.now(), meta: { meaning: st.name } };
@@ -1083,6 +1273,18 @@ async function buildPrompt(char) {
 /* 点「等回复」= 发一次请求。按钮永远可点：后台慢时可以再点一次，
  * 同一轮里谁先成功就用谁，后到的结果直接丢掉；全部失败才报错。 */
 function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+/* 模拟真人打字：每条气泡出现前等多久（毫秒）。想再慢/再快：改这里的数字，或在「设置」里调倍数 */
+function bubbleDelay(content, first) {
+  var k = Number(settings.bubbleSlow); if (!(k >= 0)) k = 1;
+  var len = String(content || '').length;
+  var ms = first ? 800 + Math.min(len * 80, 2000)      /* 第一条：基础 0.8 秒 + 每个字 0.08 秒，最多 2.8 秒 */
+                 : 1100 + Math.min(len * 140, 3400);    /* 后面几条：基础 1.1 秒 + 每个字 0.14 秒，最多 4.5 秒 */
+  return Math.round(ms * k);
+}
+function notifySrc() { return notifyFile || settings.notifyUrl || ''; }
+function playNotify() {
+  try { var src = notifySrc(); if (!src) return; var a = new Audio(src); a.play().catch(function () {}); } catch (e) {}
+}
 async function generateReply(fresh) {
   var char = cur, box = $('msgs'), r = rounds[char.id];
   if (fresh || !r || !r.active || r.won) r = rounds[char.id] = { active: true, won: false, total: 0, fails: 0 };
@@ -1110,7 +1312,8 @@ async function generateReply(fresh) {
     /* 先存好，再一条一条弹出来；中途退出聊天也不丢 */
     for (var k = 0; k < saved.length; k++) {
       var m2 = saved[k];
-      if (k > 0) await sleep(380 + Math.min(String(m2.content).length * 45, 900));
+      await sleep(bubbleDelay(m2.type === 'text' || m2.type === 'offline' ? m2.content : '', k === 0));
+      if (k === 0) playNotify();
       if (cur && cur.id === char.id && !box.querySelector('.row[data-id="' + m2.id + '"]')) {
         var n = msgNode(m2); if (n) { n.classList.add('pop'); box.appendChild(n); } lastShownTs = m2.ts; scrollBottom();
       }
@@ -1607,6 +1810,41 @@ function applyTheme() {
   }
   st.textContent = css + (settings.customCss || '');
 }
+/* ---- 美化预设：把「方案 / 壁纸 / 字体 / 自定义 CSS / 提示音 / 桌面图标」一起存起来，一键切换 ---- */
+var BEAUTY_KEYS = ['themeId', 'customCss', 'homeBg', 'fontUrl', 'fontData', 'fontName', 'notifyUrl', 'notifyName', 'iconUrls'];
+function cloneJ(v) { return v === undefined ? v : JSON.parse(JSON.stringify(v)); }
+function beautySnapshot() {
+  var o = {}; BEAUTY_KEYS.forEach(function (k) { o[k] = cloneJ(settings[k] !== undefined ? settings[k] : DEFAULTS[k]); });
+  o.homeBgFile = homeBgFile || ''; o.notifyFile = notifyFile || ''; return o;
+}
+async function applyBeauty(p) {
+  BEAUTY_KEYS.forEach(function (k) { var v = p[k] !== undefined ? p[k] : DEFAULTS[k]; settings[k] = cloneJ(v); });
+  homeBgFile = p.homeBgFile || ''; notifyFile = p.notifyFile || '';
+  if (homeBgFile) await dbPut('settings', { key: 'homeBgFile', data: homeBgFile }); else await dbDel('settings', 'homeBgFile');
+  if (notifyFile) await dbPut('settings', { key: 'notifyFile', data: notifyFile }); else await dbDel('settings', 'notifyFile');
+  await saveSettings(); applyTheme(); onShow['s-beauty']();
+}
+async function fillBeautyPresets(box) {
+  var list = (await dbAll('beautyPresets')).sort(function (a, b) { return b.ts - a.ts; });
+  box.innerHTML = '';
+  if (!list.length) box.appendChild(h('div', { class: 'bt-hint', style: 'margin:0 0 8px', text: '还没有预设。把当前的方案、壁纸、字体、提示音、桌面图标和自定义 CSS 调好后，点下面按钮存起来，以后一键切换。' }));
+  else {
+    var g = h('div', { class: 'group' });
+    list.forEach(function (p) {
+      g.appendChild(h('div', { class: 'item', onclick: function () {
+        menuSheet(p.name, [
+          ['应用这个预设（当前没存成预设的美化会被替换）', async function () { await applyBeauty(p); toast('已应用「' + p.name + '」'); }],
+          ['用当前美化覆盖它', async function () { var np = Object.assign({ id: p.id, name: p.name, ts: Date.now() }, beautySnapshot()); await dbPut('beautyPresets', np); fillBeautyPresets(box); toast('已更新「' + p.name + '」'); }],
+          ['重命名', function () { nameSheet('重命名', p.name, async function (nm) { p.name = nm; await dbPut('beautyPresets', p); fillBeautyPresets(box); }, '预设名称'); }],
+          ['删除', function () { confirmSheet('删除美化预设「' + p.name + '」？', '删除', async function () { await dbDel('beautyPresets', p.id); fillBeautyPresets(box); }, true); }]]);
+      } }, h('div', { class: 't' }, h('b', { text: p.name }), h('span', { class: 'badge', text: fmtTime(p.ts).replace(/:\d\d$/, '') }))));
+    });
+    box.appendChild(g);
+  }
+  box.appendChild(h('div', { class: 'btn-row' }, h('button', { class: 'btn primary', text: '＋ 把当前美化存为新预设', onclick: function () {
+    nameSheet('预设名称', '', async function (nm) { await dbPut('beautyPresets', Object.assign({ id: uid('bp'), name: nm, ts: Date.now() }, beautySnapshot())); fillBeautyPresets(box); toast('已保存「' + nm + '」'); }, '例如：夜间粉 / 极简白');
+  } })));
+}
 onShow['s-beauty'] = function () {
   var body = $('beauty-body'); body.innerHTML = '';
   var prev = h('div', { class: 'glass' }, h('h4', { text: '预览' }), h('div', { class: 'bt-prev' },
@@ -1614,6 +1852,8 @@ onShow['s-beauty'] = function () {
     h('div', { class: 'row me' }, h('div', { class: 'bubble', text: '好～知道啦' })),
     h('div', { class: 'btn-row' }, h('button', { class: 'btn primary', text: '主按钮' }), h('button', { class: 'btn', text: '次按钮' }))));
   body.appendChild(prev);
+  var pbox = h('div', {});
+  body.appendChild(h('div', { class: 'glass' }, h('h4', { text: '美化预设（可存多套，一键切换）' }), pbox)); fillBeautyPresets(pbox);
   var grid = h('div', { class: 'bt-grid' });
   THEMES.forEach(function (t) {
     var c = h('button', { type: 'button', class: 'bt-card' + (settings.themeId === t.id ? ' on' : ''), onclick: async function () {
@@ -1660,6 +1900,45 @@ onShow['s-beauty'] = function () {
         }); f.click();
       } }),
       h('button', { class: 'btn', text: '恢复默认', onclick: async function () { settings.fontUrl = ''; settings.fontData = ''; settings.fontName = ''; await saveSettings(); applyTheme(); onShow['s-beauty'](); } }))));
+  /* 消息提示音：角色回复到达时响一声 */
+  var nu = h('input', { type: 'text', placeholder: '音频网址 https://…（mp3 / wav / ogg）', value: settings.notifyUrl || '' });
+  nu.style.cssText = 'width:100%;padding:10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);margin-bottom:8px';
+  body.appendChild(h('div', { class: 'glass' }, h('h4', { text: '消息提示音（角色回复你时响一声）' }),
+    h('div', { class: 'bt-hint', style: 'margin:0 0 8px', text: notifyFile ? '当前：已上传的音频 ' + (settings.notifyName || '') : (settings.notifyUrl ? '当前：网址音频' : '当前：没有提示音') }), nu,
+    h('div', { class: 'btn-row' },
+      h('button', { class: 'btn primary', text: '应用网址', onclick: async function () { settings.notifyUrl = nu.value.trim(); notifyFile = ''; settings.notifyName = ''; await dbDel('settings', 'notifyFile'); await saveSettings(); onShow['s-beauty'](); toast(settings.notifyUrl ? '已应用' : '已清除'); } }),
+      h('button', { class: 'btn', text: '上传音频', onclick: function () {
+        var f = h('input', { type: 'file', accept: 'audio/*,.mp3,.wav,.ogg,.m4a,.aac' });
+        f.addEventListener('change', function () {
+          var file = f.files[0]; if (!file) return;
+          if (file.size > 3 * 1048576) { toast('音频超过 3MB 了，提示音剪短一点，或者用网址'); return; }
+          var rd = new FileReader(); rd.onload = async function () {
+            notifyFile = rd.result; settings.notifyUrl = ''; settings.notifyName = file.name;
+            await dbPut('settings', { key: 'notifyFile', data: notifyFile }); await saveSettings(); onShow['s-beauty'](); toast('已应用'); playNotify();
+          }; rd.onerror = function () { toast('音频读取失败'); }; rd.readAsDataURL(file);
+        }); f.click();
+      } }),
+      h('button', { class: 'btn', text: '试听', onclick: function () { if (!notifySrc() && !nu.value.trim()) { toast('还没有设置提示音'); return; } try { new Audio(notifySrc() || nu.value.trim()).play().catch(function () { toast('播放失败：音频格式不支持或网址打不开'); }); } catch (e) { toast('播放失败'); } } }),
+      h('button', { class: 'btn', text: '清除', onclick: async function () { notifyFile = ''; settings.notifyUrl = ''; settings.notifyName = ''; await dbDel('settings', 'notifyFile'); await saveSettings(); onShow['s-beauty'](); } }))));
+  /* 桌面图标：每个图标可以填图片网址或上传；留空用默认 */
+  var ics = h('div', {});
+  APPS.forEach(function (a) {
+    var cur0 = (settings.iconUrls || {})[a.name] || '', isData = cur0.indexOf('data:') === 0;
+    var pv = h('div', { class: 'pv' }); pv.style.background = a.color;
+    var psrc = cur0 || a.img; if (psrc) { pv.style.backgroundImage = 'url("' + String(psrc).replace(/"/g, '%22') + '")'; pv.style.backgroundSize = 'cover'; pv.style.backgroundPosition = 'center'; }
+    var inp = h('input', { type: 'text', placeholder: isData ? '已上传图片（可填网址替换）' : '图片网址 https://…（留空=默认）', value: isData ? '' : cur0 });
+    inp.addEventListener('change', async function () {
+      if (!settings.iconUrls) settings.iconUrls = {};
+      var v = inp.value.trim(); if (v) settings.iconUrls[a.name] = v; else if (!isData) delete settings.iconUrls[a.name];
+      await saveSettings(); onShow['s-beauty'](); toast(v ? '已设置「' + a.name + '」的图标' : '已恢复默认');
+    });
+    ics.appendChild(h('div', { class: 'ic-row' }, pv, h('div', { class: 'ic-main' }, h('b', { text: a.name }), inp),
+      h('button', { class: 'btn', text: '上传', onclick: function () {
+        pickImage(192, 0.9, async function (dataUrl) { if (!settings.iconUrls) settings.iconUrls = {}; settings.iconUrls[a.name] = dataUrl; await saveSettings(); onShow['s-beauty'](); toast('已设置'); });
+      } }),
+      cur0 ? h('button', { class: 'btn', text: '清除', onclick: async function () { delete settings.iconUrls[a.name]; await saveSettings(); onShow['s-beauty'](); } }) : null));
+  });
+  body.appendChild(h('div', { class: 'glass' }, h('h4', { text: '桌面图标（自定义图片；回到桌面后生效）' }), ics));
   var ta = h('textarea', { id: 'beauty-css', placeholder: '/* 例：把对方气泡改成半透明、圆角小一点 */\n.row:not(.me) .bubble { background: rgba(255,255,255,.6); border-radius: 8px; }', spellcheck: 'false' });
   ta.value = settings.customCss || '';
   body.appendChild(h('div', { class: 'glass' }, h('h4', { text: '自定义美化 CSS' }), ta,
@@ -1676,8 +1955,8 @@ async function commitSettings() {
   settings = JSON.parse(JSON.stringify(draft)); await saveSettings(); settingsDirty = false;
 }
 var PRESET_KEYS = ['baseUrl', 'apiKey', 'model', 'temperature', 'stream', 'secBaseUrl', 'secApiKey', 'secModel'];
-function nameSheet(title, init, cb) {
-  var inp = h('input', { type: 'text', value: init || '', placeholder: '例如：官方直连 / 备用反代', style: 'width:100%;padding:10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);margin-bottom:10px' });
+function nameSheet(title, init, cb, ph) {
+  var inp = h('input', { type: 'text', value: init || '', placeholder: ph || '例如：官方直连 / 备用反代', style: 'width:100%;padding:10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);margin-bottom:10px' });
   openSheet([h('h3', { text: title }), inp, h('div', { class: 'btn-row' },
     h('button', { class: 'btn primary', text: '保存', onclick: function () { var v = inp.value.trim(); if (!v) { toast('请输入名称'); return; } closeSheet(); cb(v); } }),
     h('button', { class: 'btn', text: '取消', onclick: closeSheet }))]);
@@ -1775,7 +2054,8 @@ function buildSettings() {
   body.appendChild(h('div', { class: 'group-title', text: '输出方式' }));
   body.appendChild(h('div', { class: 'group' },
     sw('stream', '流式输出', '长回复不容易被网关超时掐断。回复会收完再一起显示。'),
-    sw('autoReply', '发送后自动回复', '关闭时，发送消息后角色不会立刻回，要你点聊天页的「等回复」才会回复。')));
+    sw('autoReply', '发送后自动回复', '关闭时，发送消息后角色不会立刻回，要你点聊天页的「等回复」才会回复。'),
+    txt('bubbleSlow', '气泡出现速度（倍数）', 'number', '1', '模拟真人打字：1=默认，2=再慢一倍，0.5=快一倍，0=不等待、直接全部弹出')));
 
   body.appendChild(h('div', { class: 'group-title', text: '副 API（总结、精炼记忆；留空则用主 API）' }));
   body.appendChild(h('div', { class: 'group' },
@@ -2067,6 +2347,7 @@ $('file-import').addEventListener('change', async function () {
       var lastTh = {}; (data.thoughts || []).forEach(function (t) { lastTh[t.characterId] = Math.max(lastTh[t.characterId] || 0, t.ts || 0); });
       (data.characters || []).forEach(function (c) { c.lastSummaryTs = lastByChar[c.id] || 0; c.lastThoughtTs = lastTh[c.id] || 0; });
       for (var j = 0; j < IMPORT_STORES.length; j++) await dbBulkPut(IMPORT_STORES[j], data[IMPORT_STORES[j]] || []);
+      if (data.beautyPresets) { await dbClear('beautyPresets'); await dbBulkPut('beautyPresets', data.beautyPresets); }
       if (data.offlinePresets) { await dbClear('offlinePresets'); await dbBulkPut('offlinePresets', data.offlinePresets); }   /* 老备份没有这一项就不动现有预设 */
       if (withSettings && data.settings) { settings = Object.assign({}, DEFAULTS, data.settings); await saveSettings(); applyTheme(); }
       toast('导入完成：' + (data.characters || []).length + ' 个角色，' + (data.messages || []).length + ' 条消息');
@@ -2097,6 +2378,7 @@ async function doExport(withSettings) {
   var out = { format: 'myphone-v1', exportedAt: Date.now(), source: 'myphone' };
   for (var i = 0; i < IMPORT_STORES.length; i++) out[IMPORT_STORES[i]] = await dbAll(IMPORT_STORES[i]);
   out.offlinePresets = await dbAll('offlinePresets');
+  out.beautyPresets = await dbAll('beautyPresets');
   out.characters.forEach(function (c) { delete c.lastSummaryTs; delete c.lastThoughtTs; });
   if (withSettings) out.settings = JSON.parse(JSON.stringify(settings));
   var blob = new Blob([JSON.stringify(out)], { type: 'application/json' });
@@ -2111,6 +2393,7 @@ async function doExport(withSettings) {
   try {
     await openDB(); await loadSettings();
     try { var hb = await dbGet('settings', 'homeBgFile'); homeBgFile = (hb && hb.data) || ''; } catch (e) {}
+    try { var nf = await dbGet('settings', 'notifyFile'); notifyFile = (nf && nf.data) || ''; } catch (e) {}
     applyTheme(); await renderHome();
     if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)) navigator.serviceWorker.register('sw.js').catch(function () {});
     if (navigator.storage && navigator.storage.persist) navigator.storage.persist();

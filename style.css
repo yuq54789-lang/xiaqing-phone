@@ -294,7 +294,7 @@ button { cursor:pointer; }
 .hm-wx { cursor:pointer; }
 #s-home .app, #s-home .wdg { -webkit-touch-callout:none; -webkit-user-select:none; user-select:none; }
 .app .tile img { pointer-events:none; -webkit-user-drag:none; }
-#s-home.editing .app, #s-home.editing .wdg { animation:wiggle .26s ease-in-out infinite alternate; }
+#s-home.editing .app:not(.slot), #s-home.editing .wdg { animation:wiggle .26s ease-in-out infinite alternate; }
 #s-home.editing .ph { animation:none; opacity:.25; }
 @keyframes wiggle { from { transform:rotate(-1.6deg); } to { transform:rotate(1.6deg); } }
 .drag-clone { position:fixed !important; z-index:300; pointer-events:none; margin:0; animation:none !important; transform:scale(1.1); opacity:.95; filter:drop-shadow(0 8px 14px rgba(0,0,0,.3)); }
@@ -309,3 +309,21 @@ button { cursor:pointer; }
 mark { background:color-mix(in srgb, var(--accent) 30%, transparent); color:inherit; border-radius:3px; padding:0 1px; }
 .row.hit .bubble { animation:hitflash .9s ease 2; }
 @keyframes hitflash { 50% { box-shadow:0 0 0 3px var(--accent); } }
+/* 桌面空格：平时看不见，编辑时显示虚线框 */
+.app.slot { pointer-events:auto; }
+.app.slot .tile { background:none; box-shadow:none; }
+#s-home.editing .app.slot .tile { border:1.5px dashed rgba(255,255,255,.8); background:rgba(0,0,0,.1); }
+/* 图片消息 / 灯箱 */
+.bubble.image { padding:4px; background:transparent; border-color:transparent; box-shadow:none; }
+.row.me .bubble.image { background:transparent; }
+.bubble.image img { max-width:200px; max-height:240px; border-radius:12px; display:block; }
+.bubble.image .alt { color:var(--sub); font-size:13px; padding:6px 8px; }
+.lightbox { position:fixed; inset:0; z-index:200; background:rgba(0,0,0,.9); display:flex; align-items:center; justify-content:center; }
+.lightbox img { max-width:96vw; max-height:92vh; object-fit:contain; }
+/* 美化：桌面图标列表 */
+.ic-row { display:flex; align-items:center; gap:8px; margin-bottom:10px; }
+.ic-row .pv { width:40px; height:40px; border-radius:11px; flex:none; border:1px solid var(--line); }
+.ic-row .ic-main { flex:1; min-width:0; display:flex; flex-direction:column; gap:4px; }
+.ic-row .ic-main b { font-size:13px; font-weight:500; }
+.ic-row .ic-main input { width:100%; min-width:0; padding:6px 8px; border:1px solid var(--line); border-radius:8px; background:var(--bg); font-size:12.5px; }
+.ic-row .btn { flex:none; padding:6px 10px; }
