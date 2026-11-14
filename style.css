@@ -344,3 +344,47 @@ mark { background:color-mix(in srgb, var(--accent) 30%, transparent); color:inhe
 .voice-card .vlevel { height:6px; border-radius:3px; background:var(--line); overflow:hidden; margin:0 18px 12px; }
 .voice-card .vlevel i { display:block; height:100%; width:0; background:var(--accent); transition:width .1s linear; }
 .voice-card .vlive { min-height:44px; max-height:96px; overflow-y:auto; font-size:14px; color:var(--ink); margin-bottom:12px; white-space:pre-wrap; word-break:break-word; }
+
+/* 长按消息的小气泡菜单 */
+.msgpop-shade { position:fixed; inset:0; z-index:70; background:transparent; -webkit-tap-highlight-color:transparent; }
+.msgpop { position:fixed; display:flex; flex-wrap:wrap; max-width:min(372px, calc(100vw - 16px)); background:#2b2a28; color:#f4f1ec; border-radius:12px; padding:3px; box-shadow:0 6px 22px rgba(0,0,0,.28); animation:mpop .14s ease-out both; }
+.msgpop button { background:transparent; border:0; color:inherit; font:inherit; font-size:13.5px; padding:9px 11px; border-radius:9px; white-space:nowrap; }
+.msgpop button:active { background:rgba(255,255,255,.16); }
+.msgpop .arrow { position:absolute; bottom:-6px; width:12px; height:12px; margin-left:-6px; background:#2b2a28; transform:rotate(45deg); border-radius:2px; pointer-events:none; }
+.msgpop.below .arrow { bottom:auto; top:-6px; }
+@keyframes mpop { from { opacity:0; transform:scale(.92); } to { opacity:1; transform:none; } }
+
+/* 未读红点 / 顶部通知条 */
+.ubadge { position:absolute; top:-4px; right:-4px; min-width:18px; height:18px; padding:0 5px; border-radius:9px; background:#e5342b; color:#fff; font-size:11px; font-weight:700; line-height:18px; text-align:center; box-shadow:0 0 0 2px var(--bg); pointer-events:none; }
+.app { position:relative; }
+.app .ubadge { top:-3px; right:calc(50% - 38px); }
+#char-list .char { position:relative; }
+#char-list .char .ubadge { top:auto; bottom:12px; right:14px; box-shadow:none; }
+.banner { position:fixed; left:10px; right:10px; top:max(8px, env(safe-area-inset-top)); z-index:90; display:flex; gap:10px; align-items:center; padding:10px 12px; border-radius:16px; background:color-mix(in srgb, var(--card) 88%, transparent); -webkit-backdrop-filter:blur(14px); backdrop-filter:blur(14px); box-shadow:0 8px 28px rgba(0,0,0,.22); border:1px solid var(--line); transform:translateY(-130%); transition:transform .28s cubic-bezier(.2,.9,.3,1.1); cursor:pointer; }
+.banner.on { transform:none; }
+.banner .avatar { width:38px; height:38px; flex:none; }
+.banner .bn-main { min-width:0; display:flex; flex-direction:column; }
+.banner .bn-main b { font-size:14px; }
+.banner .bn-main span { font-size:13px; color:var(--sub); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+
+/* 小预设条 / 多选下拉 */
+.pbar { margin:0 0 10px; }
+.pbar .prow { display:flex; gap:8px; align-items:center; }
+.pbar select { flex:1; min-width:0; padding:9px 10px; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--ink); font:inherit; font-size:14px; }
+.pbar .btn { flex:none; padding:8px 12px; }
+.mp-btn { width:100%; display:flex; align-items:center; gap:8px; text-align:left; padding:11px 12px; border:1px solid var(--line); border-radius:10px; background:var(--card); color:var(--ink); font:inherit; font-size:14px; }
+.mp-btn .mp-txt { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.mp-btn .mp-arrow { color:var(--sub); }
+.mp-search { width:100%; padding:10px; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--ink); margin-bottom:6px; font:inherit; }
+.mp-list { max-height:48vh; overflow-y:auto; margin:4px 0 8px; }
+.mp-foot { display:flex; gap:8px; align-items:center; }
+.mp-foot .mp-cnt { flex:1; color:var(--sub); font-size:13px; }
+.mp-foot .btn { padding:8px 12px; }
+.stat-line { color:var(--sub); font-size:13px; padding:4px 0 10px; }
+.mtime { font-size:10.5px; color:var(--sub); margin:2px 5px 0; line-height:1.2; }
+.bwrap { display:flex; flex-direction:column; align-items:flex-start; max-width:76%; min-width:0; }
+.row.me .bwrap { align-items:flex-end; }
+.bwrap > .bubble { max-width:100%; }
+.bwrap.wide { max-width:92%; }
+.recalled-line button { border:0; background:none; color:var(--accent); font:inherit; font-size:12px; padding:0 0 0 6px; }
+.avatar.me-av { background:var(--me); color:var(--ink); }
