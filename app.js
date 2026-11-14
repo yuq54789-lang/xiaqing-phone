@@ -560,7 +560,7 @@ function toast(msg) {
 /* 弹层 */
 function openSheet(nodes) {
   var p = $('sheet-panel'); p.innerHTML = '';
-  nodes.forEach(function (n) { p.appendChild(n); });
+  nodes.forEach(function (n) { if (n) p.appendChild(n); });
   $('sheet').hidden = false;
 }
 function closeSheet() { $('sheet').hidden = true; }
@@ -618,6 +618,13 @@ function back(force) {
     openSheet([h('h3', { text: '设置有改动还没保存' }), h('div', { class: 'btn-row' },
       h('button', { class: 'btn primary', text: '保存并离开', onclick: async function () { closeSheet(); await commitSettings(); back(true); } }),
       h('button', { class: 'btn danger', text: '不保存', onclick: function () { closeSheet(); settingsDirty = false; back(true); } }),
+      h('button', { class: 'btn', text: '继续编辑', onclick: closeSheet }))]);
+    return;
+  }
+  if (!force && nav[nav.length - 1] === 's-beauty' && beautyDirty()) {
+    openSheet([h('h3', { text: '美化有改动还没保存' }), h('div', { class: 'btn-row' },
+      h('button', { class: 'btn primary', text: '保存并离开', onclick: function () { closeSheet(); beautySnap = snapBeauty(); iosAlert('已保存', '美化已保存'); back(true); } }),
+      h('button', { class: 'btn danger', text: '不保存（还原）', onclick: async function () { closeSheet(); await restoreBeauty(); back(true); } }),
       h('button', { class: 'btn', text: '继续编辑', onclick: closeSheet }))]);
     return;
   }
@@ -707,9 +714,9 @@ var APPS = [
   { name: '世界书', img: 'https://i.imgs.ovh/2026/11/12/d67bd0f136d13523ba65030a3b438ec7.jpg', color: '#c08a2e', icon: 'M12 6c-2-1.5-5-2-8-1.5v13c3-.5 6 0 8 1.5 2-1.5 5-2 8-1.5v-13C17 4 14 4.5 12 6zM12 6v13',
     tap: function () { go('s-wblist'); } },
   { name: '表情包', img: 'https://i.imgs.ovh/2026/11/12/21ffb2ac40aec04e658fe44111c04e70.jpg', color: '#8a5a8f', icon: 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM8.5 14c1 1.5 2.2 2 3.5 2s2.5-.5 3.5-2M9 9.5h.01M15 9.5h.01',
-    tap: function () { openStickerPanel('all', true); } },
+    tap: function () { go('s-stickers'); } },
   { name: '美化', img: 'https://i.imgs.ovh/2026/11/12/8500e6fda76097cda9ee7f8a6090a3e3.jpg', color: '#b0577a', icon: 'M12 3a9 9 0 1 0 0 18c1.2 0 2-.8 2-1.8 0-1.4-1.3-1.7-1.3-3 0-1 .8-1.7 1.9-1.7H17a4 4 0 0 0 4-4C21 6.6 17 3 12 3zM7.5 11h.01M10 7.5h.01M14.5 7.5h.01',
-    tap: function () { go('s-beauty'); } },
+    tap: function () { beautySnap = snapBeauty(); go('s-beauty'); } },
   { name: 'API设置', img: 'https://i.imgs.ovh/2026/11/12/e5ce0267cf4bd0b37d18a1866a178dd9.jpg', color: '#3d5a80', icon: 'M4 7h9M17 7h3M4 17h3M11 17h9M13 4v6M7 14v6',
     tap: function () { go('s-settings'); } },
   { name: '数据备份', img: 'https://i.imgs.ovh/2026/11/12/fb4761d50fc0237e8566e4ed097f9920.jpg', color: '#6b6b6b', icon: 'M4 7h16v4H4zM6 11v8h12v-8M10 15h4',
@@ -802,7 +809,7 @@ $('home-weather').onclick = weatherSheet;
 /* ---- 桌面图标 ---- */
 var DOCK_NAMES = ['聊天', '记忆', '世界书', '表情包'];
 function appBtn(a) {
-  var tile = h('div', { class: 'tile', style: 'background:' + a.color }, appIcon(a.icon));
+  var tile = h('div', { class: 'tile', style: 'background:' + a.color + ';--tc:' + a.color }, appIcon(a.icon));
   var b = h('button', { class: 'app', 'data-id': a.name, onclick: a.tap, 'aria-label': a.name }, tile, h('span', { text: a.name }));
   var iconSrc = (settings.iconUrls && settings.iconUrls[a.name]) || a.img;   /* 美化里自定义的图标优先 */
   if (iconSrc) {
@@ -1073,7 +1080,7 @@ function msgNode(m) {
   }
   var row = h('div', { class: 'row' + (me ? ' me' : ''), 'data-id': m.id });
   bindLongPress(b, function () { if (!selMode) messageMenu(m, b); });
-  if (!me) { var av0 = avatarNode(cur.avatar, cur.name); av0.style.cursor = 'pointer'; av0.title = '查看心声'; av0.addEventListener('click', function (e) { e.stopPropagation(); openThoughts(cur); }); row.appendChild(av0); }
+  if (!me) { var av0 = avatarNode(cur.avatar, cur.name); av0.style.cursor = 'pointer'; av0.title = '查看心声'; av0.addEventListener('click', function (e) { e.stopPropagation(); showThoughtCloud(av0); }); row.appendChild(av0); }
   else { var avMe = avatarNode(cur.userAvatar, cur.userNickname || '我'); if (!cur.userAvatar) avMe.classList.add('me-av'); row.appendChild(avMe); }   /* 没设置头像就显示一个字母/「我」头像 */
   var wrap = h('div', { class: 'bwrap' + (t === 'offline' ? ' wide' : '') }, b), edTxt = meta.edited ? '已编辑' : '';
   if (settings.showTime !== false || edTxt) wrap.appendChild(h('div', { class: 'mtime', text: (settings.showTime !== false ? hm(m.ts) : '') + (settings.showTime !== false && edTxt ? ' · ' : '') + edTxt }));
@@ -1516,6 +1523,7 @@ async function openStickerPanel(catId, manage) {
   function tab(id, name) {
     tabs.appendChild(h('button', { type: 'button', class: String(catId) === String(id) ? 'on' : '', text: name, onclick: function () { openStickerPanel(id, manage); } }));
   }
+  var curCat = cats.find(function (c) { return String(c.id) === String(catId); });
   tab('all', '全部'); cats.forEach(function (c) { tab(c.id, c.name); });
   var list = stickers.filter(function (s) { return catId === 'all' || String(s.categoryId) === String(catId); });
   if (!list.length) grid.appendChild(h('div', { class: 'empty', style: 'grid-column:1/-1;padding:30px 0', text: '这里还没有表情包' }));
@@ -1531,6 +1539,10 @@ async function openStickerPanel(catId, manage) {
     grid.appendChild(cell);
   });
   openSheet([h('h3', { text: manage ? '管理表情包（点一个删除）' : '发送表情包（' + list.length + '）' }), tabs, grid,
+    manage ? h('div', { class: 'btn-row', style: 'margin-bottom:8px' },
+      h('button', { class: 'btn', text: '＋ 新建分类', onclick: function () { addStickerCategory(function () { openStickerPanel(catId, manage); }); } }),
+      curCat ? h('button', { class: 'btn', text: '重命名分类', onclick: function () { renameStickerCategory(curCat, function () { openStickerPanel(catId, manage); }); } }) : null,
+      curCat ? h('button', { class: 'btn danger', text: '删除分类', onclick: function () { deleteStickerCategory(curCat, function () { openStickerPanel('all', manage); }); } }) : null) : null,
     h('div', { class: 'btn-row' },
       h('button', { class: 'btn', text: '＋ 添加', onclick: function () { addStickerForm(cats, catId); } }),
       inChat ? h('button', { class: 'btn', text: manage ? '完成管理' : '管理', onclick: function () { openStickerPanel(catId, !manage); } }) : null,
@@ -1617,7 +1629,7 @@ function addStickerForm(cats, catId) {
       }
       await dbBulkPut('stickers', add);
       toast('已添加 ' + add.length + ' 张（' + Math.round(before / 1024) + 'KB → ' + Math.round(after / 1024) + 'KB）' + (bad ? '，' + bad + ' 张失败' : '') + (anim ? '，' + anim + ' 张大动图变成了静态' : ''));
-      openStickerPanel(catId, false);
+      stickersChanged(catId);
     });
     f.click();
   } });
@@ -1625,10 +1637,75 @@ function addStickerForm(cats, catId) {
     h('button', { class: 'btn primary', text: '添加', onclick: async function () {
       if (!name.value.trim() || !url.value.trim()) { toast('名称和网址都要填'); return; }
       await dbPut('stickers', { id: uid('sticker'), name: name.value.trim(), url: url.value.trim(), categoryId: sel.value || null });
-      openStickerPanel(catId, false);
-    } }), h('button', { class: 'btn', text: '返回', onclick: function () { openStickerPanel(catId, false); } })), upBtn,
+      stickersChanged(catId);
+    } }), h('button', { class: 'btn', text: '返回', onclick: function () { stickersChanged(catId); } })), upBtn,
     h('button', { type: 'button', class: 'btn', style: 'width:100%', text: '批量导入（粘贴 / txt / Word）', onclick: function () { batchStickerForm(cats, catId); } })]);
 }
+/* ---------- 表情包分类：新建 / 重命名 / 删除 ---------- */
+function addStickerCategory(done) {
+  nameSheet('新建表情包分类', '', async function (nm) { await dbPut('stickerCategories', { id: uid('cat'), name: nm }); toast('已新建「' + nm + '」'); if (done) done(); }, '例如：委屈 / 开心 / 日常');
+}
+function renameStickerCategory(cat, done) {
+  nameSheet('重命名分类', cat.name, async function (nm) { cat.name = nm; await dbPut('stickerCategories', cat); if (done) done(); }, '分类名称');
+}
+function deleteStickerCategory(cat, done) {
+  openSheet([h('h3', { text: '删除分类「' + cat.name + '」' }), h('div', { class: 'hint', text: '里面的表情包怎么处理？' }),
+    h('div', { class: 'btn-row' },
+      h('button', { class: 'btn primary', text: '只删分类（表情包移到「未分类」）', onclick: async function () { closeSheet(); await dropCategory(cat, false); if (done) done(); } }),
+      h('button', { class: 'btn danger', text: '连里面的表情包一起删', onclick: async function () { closeSheet(); await dropCategory(cat, true); if (done) done(); } }),
+      h('button', { class: 'btn', text: '取消', onclick: closeSheet }))]);
+}
+async function dropCategory(cat, withStickers) {
+  var all = await dbAll('stickers'), mine = all.filter(function (s) { return String(s.categoryId) === String(cat.id); });
+  for (var i = 0; i < mine.length; i++) { if (withStickers) await dbDel('stickers', mine[i].id); else { mine[i].categoryId = null; await dbPut('stickers', mine[i]); } }
+  await dbDel('stickerCategories', cat.id);
+  toast(withStickers ? '已删除分类和 ' + mine.length + ' 个表情包' : '已删除分类，' + mine.length + ' 个表情包移到了未分类');
+}
+
+/* ---------- 桌面「表情包」：全屏管理页（聊天里的 ☺ 面板不变） ---------- */
+var stkCat = 'all';
+async function renderStickerPage(catId) {
+  if (catId !== undefined) stkCat = catId;
+  var stickers = await dbAll('stickers'), cats = await dbAll('stickerCategories'), body = $('stk-body'); body.innerHTML = '';
+  if (stkCat !== 'all' && stkCat !== 'null' && !cats.some(function (c) { return String(c.id) === String(stkCat); })) stkCat = 'all';
+  var counts = {}; stickers.forEach(function (s) { var k = String(s.categoryId); counts[k] = (counts[k] || 0) + 1; });
+  var tabs = h('div', { class: 'stk-tabs' });
+  function tab(id, name, n) { tabs.appendChild(h('button', { type: 'button', class: String(stkCat) === String(id) ? 'on' : '', text: name + (n != null ? ' ' + n : ''), onclick: function () { renderStickerPage(id); } })); }
+  tab('all', '全部', stickers.length); cats.forEach(function (c) { tab(c.id, c.name, counts[String(c.id)] || 0); });
+  if (counts['null']) tab('null', '未分类', counts['null']);
+  tabs.appendChild(h('button', { type: 'button', class: 'add', text: '＋ 分类', onclick: function () { addStickerCategory(function () { renderStickerPage(); }); } }));
+  body.appendChild(tabs);
+  var cat = cats.find(function (c) { return String(c.id) === String(stkCat); });
+  if (cat) body.appendChild(h('div', { class: 'btn-row', style: 'margin:0 0 10px' },
+    h('button', { type: 'button', class: 'btn', text: '重命名分类', onclick: function () { renameStickerCategory(cat, function () { renderStickerPage(); }); } }),
+    h('button', { type: 'button', class: 'btn danger', text: '删除分类', onclick: function () { deleteStickerCategory(cat, function () { stkCat = 'all'; renderStickerPage(); }); } })));
+  var list = stickers.filter(function (s) { return stkCat === 'all' || String(s.categoryId) === String(stkCat); });
+  var grid = h('div', { class: 'stk-grid page' });
+  if (!list.length) grid.appendChild(h('div', { class: 'empty', style: 'grid-column:1/-1;padding:40px 0', text: '这里还没有表情包\n点右上角「＋ 添加」' }));
+  list.forEach(function (st) {
+    var cell = h('div', { class: 'stk', title: st.name }, h('img', { src: st.url, loading: 'lazy', alt: st.name }));
+    cell.firstChild.onerror = function () { cell.textContent = st.name; };
+    cell.appendChild(h('span', { class: 'stk-name', text: st.name }));
+    cell.onclick = function () {
+      menuSheet(st.name, [
+        ['移到其他分类', function () {
+          menuSheet('移到哪个分类', [['不分类', function () { moveSticker(st, null); }]].concat(cats.map(function (c) { return [c.name, function () { moveSticker(st, c.id); }]; })));
+        }],
+        ['改名（也是角色认识它的描述）', function () { nameSheet('表情包名称', st.name, async function (nm) { st.name = nm; await dbPut('stickers', st); renderStickerPage(); }, '例如：委屈巴巴'); }],
+        ['删除', function () { confirmSheet('删除表情包「' + st.name + '」？', '删除', async function () { await dbDel('stickers', st.id); renderStickerPage(); }, true); }]]);
+    };
+    grid.appendChild(cell);
+  });
+  body.appendChild(grid);
+}
+async function moveSticker(st, catId) { st.categoryId = catId; await dbPut('stickers', st); renderStickerPage(); toast('已移动'); }
+onShow['s-stickers'] = function () { renderStickerPage(); };
+$('b-stk-add').onclick = async function () { addStickerForm(await dbAll('stickerCategories'), stkCat === 'null' ? 'all' : stkCat); };
+/* 添加/导入表情包之后：在全屏页里就刷新页面，在聊天面板里就刷新面板 */
+function stickersChanged(catId) {
+  if ($('s-stickers').classList.contains('active')) { closeSheet(); renderStickerPage(); } else openStickerPanel(catId, false);
+}
+
 async function sendSticker(st) {
   var m = { id: uid(cur.id), characterId: cur.id, role: 'user', type: 'sticker', content: st.url, ts: Date.now(), meta: { meaning: st.name } };
   await dbPut('messages', m);
@@ -1693,6 +1770,7 @@ function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
 /* 模拟真人打字：每条气泡出现前等多久（毫秒）。想再慢/再快：改这里的数字，或在「设置」里调倍数 */
 function bubbleDelay(content, first) {
   var k = Number(settings.bubbleSlow); if (!(k >= 0)) k = 1;
+  if (document.hidden) return 0;   /* 页面在后台：不模拟打字，尽快把所有气泡存好 */
   var len = String(content || '').length;
   var ms = first ? 800 + Math.min(len * 80, 2000)      /* 第一条：基础 0.8 秒 + 每个字 0.08 秒，最多 2.8 秒 */
                  : 1100 + Math.min(len * 140, 3400);    /* 后面几条：基础 1.1 秒 + 每个字 0.14 秒，最多 4.5 秒 */
@@ -1733,7 +1811,7 @@ async function generateReply(fresh) {
     await dbBulkPut('messages', saved);
     await applyDictation(prompt.dictIds, dict.texts);
     if (prompt.wantThought) {
-      if (ex.thought) await dbPut('thoughts', { characterId: char.id, heartfeltVoice: ex.thought.heartfeltVoice, randomJottings: ex.thought.randomJottings, ts: Date.now() });
+      if (ex.thought) { await dbPut('thoughts', { characterId: char.id, heartfeltVoice: ex.thought.heartfeltVoice, randomJottings: ex.thought.randomJottings, ts: Date.now() }); refreshThoughtCloud(); }
       else toast('这次回复没带上心声（模型没按格式写）');
     }
     /* 先存好，再一条一条弹出来；中途退出聊天也不丢 */
@@ -1862,9 +1940,16 @@ function showBanner(char, text) {
 /* 页面在后台（切到别的 App / 锁屏）时的系统通知：要在「API设置」里打开并允许通知；不同浏览器支持不一样 */
 function sysNotify(char, text) {
   if (!settings.sysNotify || !('Notification' in window) || Notification.permission !== 'granted') return;
-  var opt = { body: text, tag: 'chat-' + char.id, icon: /^data:image|^https?:/.test(char.avatar || '') ? char.avatar : undefined };
-  try { var n = new Notification(char.name, opt); n.onclick = function () { window.focus(); openChat(char.id); n.close(); }; }
-  catch (e) { try { navigator.serviceWorker.ready.then(function (reg) { reg.showNotification(char.name, opt); }); } catch (e2) {} }
+  var opt = { body: text, tag: 'chat-' + char.id, renotify: true, data: { cid: char.id }, icon: /^data:image|^https?:/.test(char.avatar || '') ? char.avatar : undefined };
+  function direct() { try { var n = new Notification(char.name, opt); n.onclick = function () { window.focus(); openChatFromOutside(char.id); n.close(); }; } catch (e) {} }
+  /* 优先走 Service Worker 通知：点击后由 sw.js 把页面切到对应聊天（安卓 Chrome 也只支持这种） */
+  try {
+    if (navigator.serviceWorker && navigator.serviceWorker.getRegistration) {
+      navigator.serviceWorker.getRegistration().then(function (reg) { if (reg && reg.showNotification) reg.showNotification(char.name, opt).catch(direct); else direct(); }, direct);
+      return;
+    }
+  } catch (e) {}
+  direct();
 }
 document.addEventListener('visibilitychange', function () { if (!document.hidden && cur && viewingChat(cur.id)) clearUnread(cur.id); });
 
@@ -2011,6 +2096,39 @@ async function renderThoughts() {
   }
 }
 onShow['s-thoughts'] = renderThoughts;
+
+/* ---------- 点角色头像：弹出云朵气泡，显示最新的心声和散记 ----------
+ * 每次回复生成新心声时，如果云朵开着，会直接换成最新的；历史记录在聊天页右上角的心声图标里。 */
+var cloudEl = null, cloudAnchor = null;
+function closeCloud() { if (cloudEl) { cloudEl.remove(); cloudEl = null; cloudAnchor = null; } }
+async function fillCloud() {
+  if (!cloudEl || !cur) return;
+  var rows = await charThoughts(cur.id), box = cloudEl.querySelector('.cloud-body'); box.innerHTML = '';
+  if (!rows.length) { box.appendChild(h('div', { class: 'cl-empty', text: '还没有心声。\n在角色设置里打开「每次回复都更新心声」，TA 之后每次回复你都会顺带写一条。' })); return; }
+  var t = rows[0].value;
+  box.appendChild(h('div', { class: 'cl-cap', text: '💭 ' + cur.name + ' 的心声 · ' + fmtTime(t.ts).replace(/:\d\d$/, '').slice(5) }));
+  if (t.heartfeltVoice) box.appendChild(h('div', { class: 'cl-voice', text: '“' + t.heartfeltVoice + '”' }));
+  if (t.randomJottings) box.appendChild(h('div', { class: 'cl-jot', text: t.randomJottings }));
+  placeCloud();
+}
+function placeCloud() {
+  if (!cloudEl || !cloudAnchor) return;
+  var r = cloudAnchor.getBoundingClientRect(), vw = window.innerWidth, vh = window.innerHeight, cw = cloudEl.offsetWidth, ch = cloudEl.offsetHeight;
+  var left = Math.max(10, Math.min(vw - cw - 10, r.left - 4)), top = r.bottom + 16, up = false;
+  if (top + ch > vh - 70 && r.top - ch - 16 > 60) { top = r.top - ch - 16; up = true; }
+  cloudEl.classList.toggle('up', up); cloudEl.style.left = left + 'px'; cloudEl.style.top = top + 'px';
+  cloudEl.style.setProperty('--tail', Math.max(14, Math.min(cw - 30, r.left + r.width / 2 - left - 6)) + 'px');
+}
+function showThoughtCloud(anchor) {
+  if (cloudEl) { closeCloud(); return; }
+  var shade = h('div', { class: 'cloud-shade' }), c = h('div', { class: 'cloud' }, h('i', { class: 't1' }), h('i', { class: 't2' }), h('div', { class: 'cloud-body' }),
+    h('button', { type: 'button', class: 'cl-more', text: '查看全部心声 ›', onclick: function (e) { e.stopPropagation(); closeCloud(); openThoughts(cur); } }));
+  shade.appendChild(c); document.body.appendChild(shade); cloudEl = shade; cloudAnchor = anchor;
+  shade.addEventListener('click', function (e) { if (e.target === shade) closeCloud(); });
+  fillCloud();
+}
+/* 新心声写进数据库后调用：云朵开着就换成最新的 */
+function refreshThoughtCloud() { if (cloudEl) fillCloud(); }
 
 /* ---------- 记忆页 ---------- */
 var KIND = { summary: '总结', refined: '精炼', note: '记忆' };
@@ -2245,7 +2363,7 @@ $('b-char-save').onclick = async function () {
   }
   if (cur && cur.id === c.id) { Object.assign(cur, c); refreshTitle(); $('input').placeholder = cur.offlineMode ? '写下你的动作或对白…' : '说点什么…'; }
   chars = await dbAll('characters');
-  toast('已保存'); back();
+  iosAlert('已保存', '角色设置已保存'); back();
   if (nav[nav.length - 1] === 's-chat') reloadChat();
 };
 
@@ -2645,7 +2763,7 @@ function buildSettings() {
     txt('stickerPromptLimit', '提示词里最多列出多少个表情包', 'number', '60', '表情包很多时会随机抽取这么多告诉角色，避免提示词太长')));
 }
 onShow['s-settings'] = function () { draft = JSON.parse(JSON.stringify(settings)); settingsDirty = false; buildSettings(); };
-$('b-set-save').onclick = async function () { await commitSettings(); toast('已保存'); };
+$('b-set-save').onclick = async function () { await commitSettings(); iosAlert('已保存', '设置已保存'); };
 
 /* ---------- 世界书导入导出：json / txt / Word(docx) ---------- */
 var CRC_T = null;
@@ -2818,7 +2936,7 @@ onShow['s-wbedit'] = function () {
 $('b-wb-save').onclick = async function () {
   if (!wbEditing || !wbEditing._collect) return;
   var b = wbEditing._collect(); delete b._collect;
-  await dbPut('worldBooks', b); toast('已保存'); back();
+  await dbPut('worldBooks', b); iosAlert('已保存', '世界书已保存'); back();
 };
 
 /* ---------- 线下预设（写作风格 / 格式要求；和世界书一样可导入导出） ---------- */
@@ -2899,7 +3017,7 @@ onShow['s-predit'] = function () {
 $('b-pr-save').onclick = async function () {
   if (!prEditing || !prEditing._collect) return;
   var p = prEditing._collect(); delete p._collect;
-  await dbPut('offlinePresets', p); toast('已保存'); back();
+  await dbPut('offlinePresets', p); iosAlert('已保存', '预设已保存'); back();
 };
 
 /* ---------- 导入 / 导出 ---------- */
@@ -2964,6 +3082,74 @@ async function doExport(withSettings) {
   toast('已导出 ' + (blob.size / 1048576).toFixed(1) + 'MB');
 }
 
+
+/* ---------- 美化页保存总开关 ---------- */
+var beautySnap = null;
+function snapBeauty() { return JSON.stringify({ s: settings, bg: homeBgFile || '', nf: notifyFile || '' }); }
+function beautyDirty() { return beautySnap !== null && snapBeauty() !== beautySnap; }
+async function restoreBeauty() {
+  if (beautySnap === null) return;
+  var o = JSON.parse(beautySnap); settings = o.s; homeBgFile = o.bg; notifyFile = o.nf;
+  if (homeBgFile) await dbPut('settings', { key: 'homeBgFile', data: homeBgFile }); else await dbDel('settings', 'homeBgFile');
+  if (notifyFile) await dbPut('settings', { key: 'notifyFile', data: notifyFile }); else await dbDel('settings', 'notifyFile');
+  await saveSettings(); applyTheme(); await renderHome();
+}
+$('b-beauty-save').onclick = function () { beautySnap = snapBeauty(); iosAlert('已保存', '美化设置已保存'); };
+
+/* ---------- iOS 风格居中弹窗 ---------- */
+function iosAlert(title, msg) {
+  var old = document.getElementById('ios-alert'); if (old) old.remove();
+  var el = h('div', { id: 'ios-alert', class: 'ios-alert' }, h('div', { class: 'ia-card' },
+    (function () { var d = h('div', { class: 'ia-ck' }); d.innerHTML = '<svg viewBox="0 0 24 24" width="34" height="34" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>'; return d; })(),
+    h('div', { class: 'ia-t', text: title }), msg ? h('div', { class: 'ia-m', text: msg }) : null,
+    h('button', { class: 'ia-ok', text: '好', onclick: function () { el.remove(); } })));
+  document.body.appendChild(el);
+  setTimeout(function () { if (el.parentNode) { el.classList.add('out'); setTimeout(function () { el.remove(); }, 200); } }, 1600);
+}
+
+/* ---------- 手机返回键 / 返回手势：回到上一页（先关弹层，再退页面；桌面不拦截） ---------- */
+var trapped = false, skipPop = false;
+function hasOverlay() {
+  return !$('errpop').hidden || !$('sheet').hidden || !!msgPop || !!cloudEl || !$('fab').hidden || selMode;
+}
+function closeTopOverlay() {
+  if (!$('errpop').hidden) { closeErr(); return true; }
+  if (!$('sheet').hidden) { closeSheet(); return true; }
+  if (msgPop) { closeMsgPop(); return true; }
+  if (cloudEl) { closeCloud(); return true; }
+  if (!$('fab').hidden) { closeFab(); return true; }
+  if (selMode) { exitSelect(); return true; }
+  return false;
+}
+function hasBackTarget() { return hasOverlay() || nav.length > 1; }
+function syncTrap() {
+  try {
+    if (hasBackTarget() && !trapped) { history.pushState({ trap: 1 }, ''); trapped = true; }
+    else if (!hasBackTarget() && trapped) { skipPop = true; trapped = false; history.back(); }
+  } catch (e) {}
+}
+window.addEventListener('popstate', function () {
+  if (skipPop) { skipPop = false; return; }
+  trapped = false;
+  if (!closeTopOverlay()) { if (nav.length > 1) back(); }
+  syncTrap();
+});
+setInterval(syncTrap, 250);
+
+/* ---------- 点系统通知 → 直接进对应角色的聊天（页面还活着就切过去；已被系统清掉就带 ?chat= 重新打开） ---------- */
+async function openChatFromOutside(cid) {
+  if (!cid) return;
+  try { closeTopOverlay(); closeBannerNow(); } catch (e) {}
+  chars = await dbAll('characters');
+  if (!chars.some(function (c) { return c.id === cid; })) return;
+  nav = ['s-home', 's-list']; activate('s-list');
+  await openChat(cid);
+}
+function closeBannerNow() { var b = document.getElementById('msg-banner'); if (b) b.remove(); }
+if ('serviceWorker' in navigator) navigator.serviceWorker.addEventListener('message', function (e) {
+  if (e.data && e.data.type === 'open-chat') openChatFromOutside(e.data.cid);
+});
+
 /* ---------- 启动 ---------- */
 (async function () {
   try {
@@ -2971,6 +3157,7 @@ async function doExport(withSettings) {
     try { var hb = await dbGet('settings', 'homeBgFile'); homeBgFile = (hb && hb.data) || ''; } catch (e) {}
     try { var nf = await dbGet('settings', 'notifyFile'); notifyFile = (nf && nf.data) || ''; } catch (e) {}
     await loadUnread(); applyTheme(); await renderHome();
+    try { var q0 = new URLSearchParams(location.search).get('chat'); if (q0) { history.replaceState({}, '', location.pathname); await openChatFromOutside(q0); } } catch (e) {}
     if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)) navigator.serviceWorker.register('sw.js').catch(function () {});
     if (navigator.storage && navigator.storage.persist) navigator.storage.persist();
   } catch (e) { document.body.innerHTML = '<pre style="padding:20px;white-space:pre-wrap">启动失败：' + e.message + '</pre>'; }

@@ -388,3 +388,41 @@ mark { background:color-mix(in srgb, var(--accent) 30%, transparent); color:inhe
 .bwrap.wide { max-width:92%; }
 .recalled-line button { border:0; background:none; color:var(--accent); font:inherit; font-size:12px; padding:0 0 0 6px; }
 .avatar.me-av { background:var(--me); color:var(--ink); }
+
+/* 心声云朵 / 表情包页 */
+.cloud-shade { position:fixed; inset:0; z-index:70; }
+.cloud { position:fixed; width:min(84vw, 300px); box-sizing:border-box; padding:14px 18px 10px; background:var(--card); color:var(--ink); border:1px solid var(--line); border-radius:30px 34px 28px 36px / 28px 30px 34px 30px; box-shadow:0 10px 30px rgba(0,0,0,.2); animation:cloudin .22s cubic-bezier(.2,.9,.3,1.2) both; transform-origin:var(--tail, 20px) 0; }
+.cloud.up { transform-origin:var(--tail, 20px) 100%; }
+.cloud i { position:absolute; background:var(--card); border:1px solid var(--line); border-radius:50%; }
+.cloud .t1 { width:13px; height:13px; top:-17px; left:var(--tail, 20px); }
+.cloud .t2 { width:7px; height:7px; top:-26px; left:calc(var(--tail, 20px) - 9px); }
+.cloud.up .t1 { top:auto; bottom:-17px; } .cloud.up .t2 { top:auto; bottom:-26px; }
+.cloud-body .cl-cap { font-size:11.5px; color:var(--sub); margin-bottom:6px; }
+.cloud-body .cl-voice { font-size:15px; line-height:1.55; font-style:italic; }
+.cloud-body .cl-jot { font-size:12.5px; color:var(--sub); line-height:1.6; margin-top:8px; padding-top:8px; border-top:1px dashed var(--line); white-space:pre-wrap; }
+.cloud-body .cl-empty { font-size:13px; color:var(--sub); white-space:pre-wrap; line-height:1.6; }
+.cloud .cl-more { display:block; margin:8px 0 0 auto; border:0; background:none; color:var(--accent); font:inherit; font-size:12.5px; padding:4px 0; }
+@keyframes cloudin { from { opacity:0; transform:scale(.7); } to { opacity:1; transform:none; } }
+.stk-tabs button.add { border-style:dashed; color:var(--accent); }
+.stk-grid.page { max-height:none; overflow:visible; }
+.stk-grid .stk { position:relative; }
+.stk-grid.page .stk-name { position:absolute; left:0; right:0; bottom:0; padding:12px 4px 3px; font-size:10.5px; color:#fff; text-align:center; background:linear-gradient(transparent, rgba(0,0,0,.55)); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+
+/* iOS 居中弹窗 */
+.ios-alert { position:fixed; inset:0; z-index:200; display:flex; align-items:center; justify-content:center; background:rgba(0,0,0,.28); animation:iafade .18s both; }
+.ios-alert.out { opacity:0; transition:opacity .2s; }
+.ia-card { width:min(72vw,270px); background:color-mix(in srgb, var(--card) 88%, transparent); backdrop-filter:blur(26px) saturate(1.8); -webkit-backdrop-filter:blur(26px) saturate(1.8); border-radius:16px; text-align:center; overflow:hidden; box-shadow:0 12px 40px rgba(0,0,0,.28); animation:iapop .26s cubic-bezier(.2,1.2,.3,1) both; }
+.ia-ck { color:var(--accent); padding:20px 0 0; display:flex; justify-content:center; }
+.ia-t { font-size:17px; font-weight:600; padding:8px 16px 2px; }
+.ia-m { font-size:13px; color:var(--sub); padding:2px 16px 14px; line-height:1.5; }
+.ia-card .ia-t:last-child { padding-bottom:16px; }
+.ia-ok { display:block; width:100%; border:0; border-top:.5px solid var(--line); background:none; color:var(--accent); font:inherit; font-size:17px; font-weight:600; padding:12px 0; }
+.ia-ok:active { background:rgba(128,128,128,.15); }
+@keyframes iafade { from { opacity:0; } to { opacity:1; } }
+@keyframes iapop { from { opacity:0; transform:scale(1.15); } to { opacity:1; transform:none; } }
+/* 桌面图标：半透明 + 高光 + 内描边（只加质感，不动你调的尺寸/圆角/阴影参数） */
+.app .tile { position:relative; }
+.app:not(.slot) .tile:not(.img) { background:color-mix(in srgb, var(--tc, #888) 72%, transparent) !important; backdrop-filter:blur(10px) saturate(1.5); -webkit-backdrop-filter:blur(10px) saturate(1.5); }
+.app:not(.slot) .tile::after { content:''; position:absolute; inset:0; border-radius:inherit; pointer-events:none;
+  background:linear-gradient(155deg, rgba(255,255,255,.42) 0%, rgba(255,255,255,.08) 42%, rgba(255,255,255,0) 60%, rgba(255,255,255,.12) 100%);
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.5), inset 0 1.5px 1px rgba(255,255,255,.75), inset 0 -1px 1px rgba(0,0,0,.08); }
