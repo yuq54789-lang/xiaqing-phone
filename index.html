@@ -46,11 +46,14 @@
     <div id="selbar" hidden><span id="sel-n">已选 0 条</span><button type="button" class="pill ghost" id="sel-edit">编辑</button><button type="button" class="pill ghost" id="sel-copy">复制</button><button type="button" class="pill ghost" id="sel-del">删除</button><button type="button" class="pill" id="sel-cancel">取消</button></div>
     <form id="composer" autocomplete="off">
       <button type="button" class="icon" id="b-sticker" aria-label="表情包">☺</button>
+      <div class="inwrap">
+        <textarea id="input" rows="1" placeholder="说点什么…"></textarea>
+        <button type="button" class="pill ghost" id="b-wait">等回复</button>
+        <button type="submit" class="pill" id="b-send">发送</button>
+      </div>
       <button type="button" class="icon" id="b-plus" aria-label="更多">＋</button>
-      <textarea id="input" rows="1" placeholder="说点什么…"></textarea>
-      <button type="button" class="pill ghost" id="b-wait">等回复</button>
-      <button type="submit" class="pill" id="b-send">发送</button>
     </form>
+    <div id="plusmenu" hidden><div class="stack" id="plus-stack"></div></div>
   </section>
 
   <section class="screen" id="s-search">

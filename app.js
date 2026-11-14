@@ -1032,6 +1032,111 @@ function scrollBottom() { var m = $('msgs'); m.scrollTop = m.scrollHeight; pinUn
 function pinScroll() { if (Date.now() < pinUntil) { var m = $('msgs'); m.scrollTop = m.scrollHeight; } }
 ['touchstart', 'wheel', 'mousedown'].forEach(function (ev) { $('msgs').addEventListener(ev, function () { pinUntil = 0; }, { passive: true }); });
 
+/* ---------- 自动翻译（不走你的 AI 接口；用浏览器自带翻译 / 免费公共翻译接口） ---------- */
+var TR_LANGS = [['zh-CN', '中文'], ['en', 'English'], ['ja', '日本語'], ['ko', '한국어'], ['fr', 'Français'], ['es', 'Español'], ['de', 'Deutsch'], ['ru', 'Русский'], ['pt', 'Português'], ['it', 'Italiano'], ['vi', 'Tiếng Việt'], ['id', 'Bahasa Indonesia'], ['th', 'ไทย'], ['ar', 'العربية']];
+function trScript(code) { return { 'zh-CN': 'zh', ja: 'ja', ko: 'ko', ru: 'ru', ar: 'ar', th: 'th' }[code] || 'latin'; }
+function detectScript(text) {
+  var t = String(text).replace(/https?:\/\/\S+/g, ' '), c = { zh: 0, kana: 0, ko: 0, ru: 0, ar: 0, th: 0, latin: 0 };
+  for (var i = 0; i < t.length; i++) {
+    var x = t.charCodeAt(i);
+    if (x >= 0x4E00 && x <= 0x9FFF) c.zh++;
+    else if ((x >= 0x3040 && x <= 0x30FF) || (x >= 0x31F0 && x <= 0x31FF)) c.kana++;
+    else if ((x >= 0xAC00 && x <= 0xD7AF) || (x >= 0x1100 && x <= 0x11FF)) c.ko++;
+    else if (x >= 0x400 && x <= 0x4FF) c.ru++;
+    else if (x >= 0x600 && x <= 0x6FF) c.ar++;
+    else if (x >= 0xE00 && x <= 0xE7F) c.th++;
+    else if ((x >= 65 && x <= 90) || (x >= 97 && x <= 122) || (x >= 0xC0 && x <= 0x24F) || (x >= 0x1E00 && x <= 0x1EFF)) c.latin++;
+  }
+  if (c.kana > 0 && c.kana + c.zh > c.latin * 0.5) return 'ja';
+  var best = '', n = 0; ['zh', 'ko', 'ru', 'ar', 'th', 'latin'].forEach(function (k) { if (c[k] > n) { n = c[k]; best = k; } });
+  return n >= 2 || (n >= 1 && t.trim().length <= 6) ? best : '';
+}
+function needTranslate(text, cfg) {
+  var sc = detectScript(text); if (!sc) return false;
+  var toSc = trScript(cfg.to);
+  if (cfg.from && cfg.from !== 'auto') {
+    if (cfg.from === cfg.to) return false;
+    var fromSc = trScript(cfg.from);
+    return sc === fromSc && (sc !== toSc || cfg.from !== cfg.to);
+  }
+  return sc !== toSc;
+}
+var trProvider = 0, trCache = {}, trMade = {}, trBrowserBad = false;
+function trFetch(url, ms) {
+  var ctl = ('AbortController' in window) ? new AbortController() : null, to = setTimeout(function () { if (ctl) ctl.abort(); }, ms || 9000);
+  return fetch(url, ctl ? { signal: ctl.signal } : {}).then(function (r) { clearTimeout(to); if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); }, function (e) { clearTimeout(to); throw e; });
+}
+var TR_PROVIDERS = [
+  { name: '浏览器自带', run: async function (q, sl, tl) {
+    if (!('Translator' in self) || sl === 'auto') throw new Error('无');
+    function lim(p, ms) { return Promise.race([p, new Promise(function (_, rej) { setTimeout(function () { rej(new Error('超时')); }, ms); })]); }   /* 有的浏览器这个接口会一直不返回，必须设超时 */
+    var key = sl + '>' + tl, tr = trMade[key];
+    if (trBrowserBad) throw new Error('无');
+    try {
+      if (!tr) {
+        if ((await lim(Translator.availability({ sourceLanguage: sl, targetLanguage: tl }), 2500)) !== 'available') throw new Error('无');
+        tr = trMade[key] = await lim(Translator.create({ sourceLanguage: sl, targetLanguage: tl }), 4000);
+      }
+      return await lim(tr.translate(q), 6000);
+    } catch (e) { trBrowserBad = true; throw e; }
+  } },
+  { name: 'Google', run: async function (q, sl, tl) {
+    var j = await trFetch('https://translate.googleapis.com/translate_a/single?client=gtx&sl=' + encodeURIComponent(sl) + '&tl=' + encodeURIComponent(tl) + '&dt=t&q=' + encodeURIComponent(q));
+    var out = (j[0] || []).map(function (x) { return x[0] || ''; }).join('');
+    if (!out) throw new Error('空'); return out;
+  } },
+  { name: 'MyMemory', run: async function (q, sl, tl) {
+    var j = await trFetch('https://api.mymemory.translated.net/get?q=' + encodeURIComponent(q) + '&langpair=' + encodeURIComponent((sl === 'auto' ? 'autodetect' : sl) + '|' + tl));
+    var out = j && j.responseData && j.responseData.translatedText;
+    if (!out || /MYMEMORY WARNING|INVALID/i.test(out)) throw new Error('额度或语言不支持'); return out;
+  } }
+];
+/* 把长文切成 ≤450 字一段（按换行/句号），逐段翻译再拼回去 */
+function trChunks(text) {
+  var parts = String(text).split(/(?<=[\n。！？!?.])/), out = [], cur = '';
+  parts.forEach(function (p) { if ((cur + p).length > 450 && cur) { out.push(cur); cur = ''; } cur += p; while (cur.length > 450) { out.push(cur.slice(0, 450)); cur = cur.slice(450); } });
+  if (cur) out.push(cur); return out;
+}
+async function freeTranslate(text, from, to) {
+  var key = (from || 'auto') + '|' + to + '|' + text; if (trCache[key]) return trCache[key];
+  var sl = from && from !== 'auto' ? from : ({ zh: 'zh-CN', ja: 'ja', ko: 'ko', ru: 'ru', ar: 'ar', th: 'th', latin: 'en' }[detectScript(text)] || 'auto');
+  var chunks = trChunks(text), lastErr = null;
+  for (var k = 0; k < TR_PROVIDERS.length; k++) {
+    var pi = (trProvider + k) % TR_PROVIDERS.length;
+    try {
+      var outs = [];
+      for (var c = 0; c < chunks.length; c++) outs.push(await TR_PROVIDERS[pi].run(chunks[c], pi === 1 ? (from && from !== 'auto' ? sl : 'auto') : sl, to));
+      trProvider = pi; var res = outs.join('').trim(); if (!res) throw new Error('空');
+      return (trCache[key] = res);
+    } catch (e) { lastErr = e; }
+  }
+  throw lastErr || new Error('翻译失败');
+}
+var trChain = Promise.resolve();
+function queueTranslate(m, el, cfg) {
+  trChain = trChain.then(function () { return translateMsg(m, el, cfg); }).then(function () { return sleep(120); });
+}
+async function translateMsg(m, el, cfg) {
+  el.className = 'trans loading'; el.textContent = '翻译中…'; el.onclick = null;
+  try {
+    var res = await freeTranslate(m.content, cfg.from, cfg.to);
+    el.className = 'trans'; el.textContent = res;
+    var fresh = await dbGet('messages', m.id);
+    if (fresh && fresh.content === m.content) { fresh.meta = fresh.meta || {}; fresh.meta.tr = { to: cfg.to, src: m.content, text: res }; await dbPut('messages', fresh); m.meta = fresh.meta; }
+  } catch (e) {
+    el.className = 'trans err'; el.textContent = '翻译失败，点这里重试';
+    el.onclick = function () { translateMsg(m, el, cfg); };
+  }
+}
+function transNode(m) {
+  var cfg = cur && cur.translate; if (!cfg || !cfg.on || m.role !== 'assistant') return null;
+  var t = m.type || 'text'; if (!(t === 'text' || t === 'offline' || (t === 'voice' && m.content)) || !m.content) return null;
+  var tr = m.meta && m.meta.tr;
+  if (tr && tr.to === cfg.to && tr.src === m.content) return h('div', { class: 'trans', text: tr.text });
+  if (!needTranslate(m.content, cfg)) return null;
+  var el = h('div', { class: 'trans loading', text: '翻译中…' }); queueTranslate(m, el, cfg); return el;
+}
+
 function msgNode(m) {
   if (m.hidden || m.type === 'system') return null;
   if (m.type === 'pat') return h('div', { class: 'sysline', text: m.content });
@@ -1083,6 +1188,7 @@ function msgNode(m) {
   if (!me) { var av0 = avatarNode(cur.avatar, cur.name); av0.style.cursor = 'pointer'; av0.title = '查看心声'; av0.addEventListener('click', function (e) { e.stopPropagation(); showThoughtCloud(av0); }); row.appendChild(av0); }
   else { var avMe = avatarNode(cur.userAvatar, cur.userNickname || '我'); if (!cur.userAvatar) avMe.classList.add('me-av'); row.appendChild(avMe); }   /* 没设置头像就显示一个字母/「我」头像 */
   var wrap = h('div', { class: 'bwrap' + (t === 'offline' ? ' wide' : '') }, b), edTxt = meta.edited ? '已编辑' : '';
+  var trn = transNode(m); if (trn) wrap.appendChild(trn);
   if (settings.showTime !== false || edTxt) wrap.appendChild(h('div', { class: 'mtime', text: (settings.showTime !== false ? hm(m.ts) : '') + (settings.showTime !== false && edTxt ? ' · ' : '') + edTxt }));
   row.appendChild(wrap);
   return row;
@@ -1437,7 +1543,29 @@ async function openVoiceRecorder() {
     await pushVoiceMsg(m);
   };
 }
-$('b-plus').onclick = function () { if (cur) menuSheet('', [['🎤 语音', openVoiceRecorder], ['🎙 用系统录音机录 / 选音频文件', function () { voiceFromFile(true); }], ['🖼 图片', openImagePicker]]); };
+/* 底栏「＋」：向上展开一列悬浮圆（语音 / 音频文件 / 图片 / 一起听 / 看手机），做法和右上角 ⋯ 一样 */
+var PLUS_ITEMS = [
+  ['语音', 'M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3zM6 11a6 6 0 0 0 12 0M12 17v4', function () { openVoiceRecorder(); }],
+  ['系统录音机 / 音频文件', 'M3 12h2l2-6 3 12 3-9 2 3h6', function () { voiceFromFile(true); }],
+  ['图片', 'M4 5h16v14H4zM4 16l5-5 4 4 3-3 4 4M9 9.5h.01', function () { openImagePicker(); }],
+  ['一起听（网易云）', 'M9 18V5l11-2v13M9 18a3 3 0 1 1-3-3 3 3 0 0 1 3 3zM20 16a3 3 0 1 1-3-3 3 3 0 0 1 3 3z', function () { toast('一起听歌（关联桌面「网易云音乐」）还在开发中'); }],
+  ['看手机', 'M8 3h8a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H8a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1zM11 18h2', function () { toast('看手机（关联桌面「看手机」）还在开发中'); }]
+];
+function closePlus() { $('plusmenu').hidden = true; $('b-plus').classList.remove('on'); }
+$('b-plus').onclick = function () {
+  if (!cur) return;
+  var pm = $('plusmenu'), st = $('plus-stack');
+  if (!pm.hidden) { closePlus(); return; }
+  st.innerHTML = '';
+  PLUS_ITEMS.forEach(function (it, i) {
+    var b = h('button', { type: 'button', 'aria-label': it[0], onclick: function (e) { e.stopPropagation(); closePlus(); it[2](); } });
+    b.style.animationDelay = (i * 35) + 'ms';
+    b.innerHTML = '<svg viewBox="0 0 24 24"><path d="' + it[1] + '"/></svg><em>' + it[0] + '</em>';
+    st.appendChild(b);
+  });
+  pm.hidden = false; $('b-plus').classList.add('on');
+};
+$('plusmenu').addEventListener('click', function (e) { if (e.target === this) closePlus(); });
 
 /* AI 的语音：用浏览器自带的朗读（免费、不请求）。声音是系统的，不是角色本人的声音 */
 function speakLang(t) { return /[぀-ヿ]/.test(t) ? 'ja-JP' : /[가-힯]/.test(t) ? 'ko-KR' : /[一-鿿]/.test(t) ? 'zh-CN' : 'en-US'; }
@@ -1757,6 +1885,15 @@ async function buildPrompt(char) {
   }
   var preset = null;
   if (char.offlineMode && char.offlinePresetId) { try { preset = (await dbGet('offlinePresets', char.offlinePresetId)) || null; } catch (e) {} }
+  if (preset && preset.entries && preset.entries.length) {   /* 预设里的条目：没关键词=常驻，有关键词=最近聊天里出现才带入 */
+    var hayP = history.slice(-12).map(function (m) { return msgToText(m); }).join('\n').toLowerCase();
+    var extra = preset.entries.filter(function (e) {
+      if (!e || e.enabled === false || !e.content) return false;
+      var ks = (e.keys || []).filter(Boolean);
+      return !ks.length || ks.some(function (k) { return hayP.indexOf(String(k).toLowerCase()) !== -1; });
+    }).map(function (e) { return (e.title ? '【' + e.title + '】\n' : '') + e.content; });
+    preset = { content: [preset.content || ''].concat(extra).filter(function (x) { return String(x).trim(); }).join('\n\n') };
+  }
   var wantThought = !!(char.autoThought && char.autoThought.enabled);
   var pool = stickerPool(await dbAll('stickers'), char.stickerCategoryIds);
   var shown = sampleStickers(pool, settings.stickerPromptLimit);
@@ -2449,6 +2586,20 @@ onShow['s-chatset'] = function () {
     h('div', { class: 'btn-row' },
       h('button', { class: 'btn primary', text: '上传图片', onclick: function () { pickImage(1280, 0.75, async function (d) { cur.chatBg = d; await saveCur(); applyChatLook(); onShow['s-chatset'](); }); } }),
       h('button', { class: 'btn', text: '清除', onclick: async function () { cur.chatBg = ''; await saveCur(); applyChatLook(); onShow['s-chatset'](); } }))));
+  /* 自动翻译：译文显示在对方每条消息的气泡下面一行；走免费翻译，不消耗你的 AI 请求 */
+  var tcfg = cur.translate || { on: false, from: 'auto', to: 'zh-CN' };
+  function langSel(withAuto, val, on) {
+    var sel = h('select', {}); if (withAuto) sel.appendChild(h('option', { value: 'auto', text: '自动识别' }));
+    TR_LANGS.forEach(function (l) { sel.appendChild(h('option', { value: l[0], text: l[1] })); });
+    sel.value = val; sel.onchange = function () { on(sel.value); }; return sel;
+  }
+  async function saveTr() { cur.translate = tcfg; await saveCur(); reloadChat(); }
+  var trSw = switchEl(tcfg.on, function (v) { tcfg.on = v; saveTr(); });
+  body.appendChild(h('div', { class: 'glass' }, h('h4', { text: '自动翻译（不走你的 AI 请求）' }),
+    h('div', { class: 'field inline' }, h('label', { text: '开启' }), trSw.el),
+    field('对方说的语言', langSel(true, tcfg.from || 'auto', function (v) { tcfg.from = v; saveTr(); })),
+    field('翻译成', langSel(false, tcfg.to || 'zh-CN', function (v) { tcfg.to = v; saveTr(); })),
+    h('div', { class: 'bt-hint', text: '例：对方说「English」→ 翻译成「中文」：对方发英文时，气泡下面多一行中文；发中文就不翻。反过来选「中文 → English」，对方发中文时下面显示英文。用浏览器自带翻译 / Google / MyMemory 三个免费来源，哪个能用就用哪个；译文存在本地，不会重复请求。' })));
   var fsv = h('span', { class: 'val', text: (cur.chatFontSize || 15) + 'px' });
   var fr = h('input', { type: 'range', min: '12', max: '22', step: '1', value: String(cur.chatFontSize || 15) });
   fr.addEventListener('input', function () { fsv.textContent = fr.value + 'px'; });
@@ -2954,9 +3105,46 @@ function parsePresetText(text, defName) {
   return out.map(function (x) { return { name: x.name, content: x.content.trim() }; }).filter(function (x) { return x.content; });
 }
 function normalizePresetJson(data, defName) {
-  var list = Array.isArray(data) ? data : (data && data.offlinePresets) ? data.offlinePresets : (data && data.content) ? [data] : null;
-  if (!list) throw new Error('JSON 里找不到预设（需要 offlinePresets 数组，或带 name / content 的对象）');
-  return list.map(function (x) { return { name: x.name || x.title || defName, content: String(x.content || x.prompt || '').trim() }; }).filter(function (x) { return x.content; });
+  /* 尽量宽松地读：myphone 备份 / 世界书格式 / 酒馆(SillyTavern)预设与世界信息 / 普通 name+content 数组 */
+  function entOf(x) {
+    if (!x || typeof x !== 'object') return null;
+    var content = x.content != null ? x.content : (x.text != null ? x.text : (x.prompt != null ? x.prompt : x.value));
+    if (content == null || !String(content).trim()) return null;
+    var keys = x.keys || x.key || x.keywords || x.triggers || x.primary_keys || [];
+    if (typeof keys === 'string') keys = keys.split(/[,，、;；\n]/);
+    keys = (Array.isArray(keys) ? keys : []).map(function (k) { return String(k).trim(); }).filter(Boolean);
+    var en = x.enabled !== false && x.disable !== true && x.disabled !== true;
+    return { title: String(x.title || x.comment || x.name || x.identifier || x.label || '').trim(), keys: keys, content: String(content).trim(), enabled: en };
+  }
+  function listOf(v) { return Array.isArray(v) ? v : (v && typeof v === 'object' ? Object.keys(v).map(function (k) { return v[k]; }) : []); }
+  function containers(d) {
+    if (!d || typeof d !== 'object') return [];
+    if (Array.isArray(d)) {
+      if (d.length && d.every(function (x) { return x && typeof x === 'object' && (x.entries || x.prompts); })) return d;
+      var hasKeys = d.some(function (x) { return x && (x.keys || x.key || x.keywords || x.triggers); });
+      if (!hasKeys) return d.map(function (x) { return x && { name: x.name || x.title || x.comment, content: x.content != null ? x.content : (x.prompt != null ? x.prompt : x.text) }; }).filter(Boolean);
+      return [{ entries: d }];
+    }
+    if (d.offlinePresets) return listOf(d.offlinePresets);
+    if (d.worldBooks) return listOf(d.worldBooks);
+    if (d.entries || d.prompts) return [d];
+    if (d.data && (d.data.entries || d.data.prompts)) return [d.data];
+    if (d.character_book && d.character_book.entries) return [d.character_book];
+    if (entOf(d)) return [{ name: d.name, entries: [d] }];
+    return [];
+  }
+  var out = [];
+  containers(data).forEach(function (c, ci) {
+    var nm = String(c.name || c.title || (c.entries || c.prompts ? '' : '') || '').trim() || (ci ? defName + (ci + 1) : defName);
+    var ents = listOf(c.entries || c.prompts).map(entOf).filter(Boolean);
+    var base = c.content != null ? String(c.content).trim() : '';
+    if (!ents.length && !base) return;
+    /* 只有「名称+内容」的普通预设：直接当预设；有条目的：整套保留条目和关键词 */
+    var simple = !c.entries && !c.prompts;
+    out.push(simple ? { name: nm, content: base } : { name: nm, content: base, entries: ents });
+  });
+  if (!out.length) throw new Error('JSON 里没找到可用的预设内容。\n顶层字段：' + (data && typeof data === 'object' ? Object.keys(data).slice(0, 12).join('、') || '（空）' : typeof data) + '\n需要含 entries / prompts / offlinePresets，或带 name+content 的数组。');
+  return out;
 }
 async function importPresets() {
   var f = h('input', { type: 'file', accept: '.json,.txt,.docx,.md,text/plain,application/json' });
@@ -2964,12 +3152,13 @@ async function importPresets() {
     var file = f.files[0]; if (!file) return;
     try {
       var base = file.name.replace(/\.[^.]+$/, ''), ext = ((file.name.match(/\.([^.]+)$/) || [])[1] || '').toLowerCase(), list;
-      if (ext === 'json') list = normalizePresetJson(JSON.parse(await file.text()), base);
+      if (ext === 'json') list = normalizePresetJson(JSON.parse((await file.text()).replace(/^\uFEFF/, '')), base);
       else if (ext === 'docx') list = parsePresetText(await readDocxText(await file.arrayBuffer()), base);
       else if (ext === 'doc') throw new Error('旧版 .doc 读不了，请在 Word 里另存为 .docx 或 .txt');
       else list = parsePresetText(await file.text(), base);
       if (!list.length) throw new Error('没有读到任何预设内容');
-      for (var i = 0; i < list.length; i++) await dbPut('offlinePresets', { id: uid('pr'), name: list[i].name, content: list[i].content });
+      list = list.filter(function (x) { return x.content || (x.entries && x.entries.length); });
+      for (var i = 0; i < list.length; i++) await dbPut('offlinePresets', { id: uid('pr'), name: list[i].name, content: list[i].content || '', entries: list[i].entries || undefined });
       toast('已导入 ' + list.length + ' 个预设'); renderPrList();
     } catch (e) { openSheet([h('h3', { text: '导入失败' }), h('pre', { text: e.message }), h('button', { class: 'btn', text: '关闭', onclick: closeSheet })]); }
   });
@@ -2992,8 +3181,8 @@ async function renderPrList() {
   var g = h('div', { class: 'group' });
   list.forEach(function (p) {
     g.appendChild(h('div', { class: 'item', onclick: function () { editPreset(p.id); } },
-      h('div', { class: 't' }, h('b', { text: p.name || '未命名' }), h('span', { class: 'badge', text: (p.content || '').length + ' 字' })),
-      h('div', { class: 'c', text: (p.content || '').slice(0, 60) })));
+      h('div', { class: 't' }, h('b', { text: p.name || '未命名' }), h('span', { class: 'badge', text: p.entries && p.entries.length ? p.entries.length + ' 个条目' : (p.content || '').length + ' 字' })),
+      h('div', { class: 'c', text: (p.content || (p.entries && p.entries[0] ? p.entries[0].content : '')).slice(0, 60) })));
   });
   body.appendChild(g);
 }
@@ -3009,10 +3198,26 @@ onShow['s-predit'] = function () {
   var p = prEditing, body = $('predit-body'); body.innerHTML = '';
   var name = h('input', { type: 'text', value: p.name }), ta = h('textarea', { style: 'min-height:320px' }); ta.value = p.content || '';
   body.appendChild(h('div', { class: 'group' }, field('预设名称', name), field('预设内容', ta, '写给模型的写作要求，比如文风、人称、描写重点、格式。字数请在角色设置里填，这里不用写。')));
+  /* 条目（像世界书）：没填关键词=一直带入，填了=最近聊天出现关键词才带入 */
+  var eHolder = h('div', {}), eRows = [];
+  function addPrEntry(e) {
+    var t = h('input', { type: 'text', value: e.title || '', placeholder: '条目标题' });
+    var k = h('input', { type: 'text', value: (e.keys || []).join(','), placeholder: '关键词，逗号分隔；留空 = 一直带入' });
+    var c = h('textarea', { style: 'min-height:90px' }); c.value = e.content || '';
+    var on = h('input', { type: 'checkbox' }); on.checked = e.enabled !== false;
+    var row = h('div', { class: 'group' }, field('标题', t), field('关键词', k), field('内容', c),
+      h('div', { class: 'btn-row' }, h('label', { style: 'display:flex;align-items:center;gap:6px;font-size:13px' }, on, '启用'),
+        h('button', { class: 'btn danger', text: '删除条目', onclick: function () { eRows.splice(eRows.indexOf(r), 1); row.remove(); } })));
+    var r = { get: function () { return { title: t.value.trim(), keys: k.value.split(/[,，、]/).map(function (x) { return x.trim(); }).filter(Boolean), content: c.value.trim(), enabled: on.checked }; } };
+    eRows.push(r); eHolder.appendChild(row);
+  }
+  (p.entries || []).forEach(addPrEntry);
+  body.appendChild(h('h4', { text: '条目（可选）', style: 'margin:14px 4px 6px' })); body.appendChild(eHolder);
+  body.appendChild(h('div', { class: 'btn-row' }, h('button', { class: 'btn', text: '＋ 添加条目', onclick: function () { addPrEntry({}); } })));
   body.appendChild(h('div', { class: 'btn-row' }, h('button', { class: 'btn danger', text: '删除这个预设', onclick: function () {
     confirmSheet('删除「' + p.name + '」？用了它的角色会回到不使用预设。', '删除', async function () { await dbDel('offlinePresets', p.id); prEditing = null; back(); }, true);
   } })));
-  p._collect = function () { p.name = name.value.trim() || '未命名'; p.content = ta.value; return p; };
+  p._collect = function () { p.name = name.value.trim() || '未命名'; p.content = ta.value; var es = eRows.map(function (r) { return r.get(); }).filter(function (e) { return e.content; }); if (es.length) p.entries = es; else delete p.entries; return p; };
 };
 $('b-pr-save').onclick = async function () {
   if (!prEditing || !prEditing._collect) return;
@@ -3110,11 +3315,12 @@ function iosAlert(title, msg) {
 /* ---------- 手机返回键 / 返回手势：回到上一页（先关弹层，再退页面；桌面不拦截） ---------- */
 var trapped = false, skipPop = false;
 function hasOverlay() {
-  return !$('errpop').hidden || !$('sheet').hidden || !!msgPop || !!cloudEl || !$('fab').hidden || selMode;
+  return !$('errpop').hidden || !$('sheet').hidden || !$('plusmenu').hidden || !!msgPop || !!cloudEl || !$('fab').hidden || selMode;
 }
 function closeTopOverlay() {
   if (!$('errpop').hidden) { closeErr(); return true; }
   if (!$('sheet').hidden) { closeSheet(); return true; }
+  if (!$('plusmenu').hidden) { closePlus(); return true; }
   if (msgPop) { closeMsgPop(); return true; }
   if (cloudEl) { closeCloud(); return true; }
   if (!$('fab').hidden) { closeFab(); return true; }
