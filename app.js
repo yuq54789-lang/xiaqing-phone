@@ -111,6 +111,7 @@ var DEFAULTS = {
   iconUrls: {},                  /* 自定义桌面图标：{ 应用名: 图片网址或 data URI } */
   asrLang: 'zh-CN',              /* 语音识别语言 */
   showTime: true,                /* 每条气泡下面显示时间（几点几分） */
+    enterSend: false,              /* 回车发送（电脑键盘）：开=Enter 发送、Shift+Enter 换行；关=Enter 换行、Ctrl+Enter 发送 */
   sysNotify: false,              /* 页面在后台时发系统通知（需要浏览器允许） */
   voiceSend: 'audio'             /* 发语音给 AI 的方式：audio=直接发音频（Gemini 等能听的模型）；text=只发文字+语气提示 */
 };
@@ -1312,8 +1313,8 @@ function msgNode(m) {
   var wrap = h('div', { class: 'bwrap' + (t === 'offline' ? ' wide' : '') }, b), edTxt = meta.edited ? '已编辑' : '';
   var showT = settings.showTime !== false, ftxt = (showT ? hm(m.ts) : '') + (showT && edTxt ? ' · ' : '') + edTxt;
   var foot = ftxt ? h('div', { class: 'bfoot', text: ftxt }) : null;
-  if (foot) b.appendChild(foot);
-  addTrans(m, b, foot);
+  if (foot) wrap.appendChild(foot);
+  addTrans(m, b, null);
   row.appendChild(wrap);
   return row;
 }
@@ -1511,7 +1512,19 @@ function openImagePicker() {
   });
   f.click();
 }
-$('input').addEventListener('keydown', function (e) { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); $('composer').requestSubmit(); } });
+var lastShift = false;
+$('input').addEventListener('keydown', function (e) {
+  lastShift = e.shiftKey;
+  if (e.key !== 'Enter' || e.isComposing || e.keyCode === 229) return;   /* 正在用拼音选字时的回车不算 */
+  var send = settings.enterSend ? (!e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) || e.ctrlKey || e.metaKey : (e.ctrlKey || e.metaKey);
+  if (send) { e.preventDefault(); $('composer').requestSubmit(); }
+});
+$('input').addEventListener('beforeinput', function (e) {
+  if (!settings.enterSend || e.inputType !== 'insertLineBreak') return;
+  if (lastShift) return;   /* Shift+Enter 是换行，不发送 */
+  e.preventDefault();
+  $('composer').requestSubmit();
+});
 
 /* ---------- 长按消息：在气泡旁边弹出的小菜单 ---------- */
 var msgPop = null;
@@ -3041,6 +3054,7 @@ function buildSettings() {
     sw('stream', '流式输出', '长回复不容易被网关超时掐断。回复会收完再一起显示。'),
     sw('autoReply', '发送后自动回复', '关闭时，发送消息后角色不会立刻回，要你点聊天页的「等回复」才会回复。'),
     sw('showTime', '显示消息时间', '每条气泡下面显示几点几分。'),
+    sw('enterSend', '回车发送消息', '开启后按 Enter 直接发送，Shift+Enter 换行（电脑键盘）。关闭时 Enter 是换行，Ctrl+Enter 发送。手机输入法的回车键不受影响。'),
     sw('sysNotify', '后台系统通知', '切到别的 App 或锁屏时，角色发来的第一条消息会弹系统通知。打开时会向浏览器申请通知权限；有些内置浏览器不支持。'),
     txt('bubbleSlow', '气泡出现速度（倍数）', 'number', '1', '模拟真人打字：1=默认，2=再慢一倍，0.5=快一倍，0=不等待、直接全部弹出')));
 
