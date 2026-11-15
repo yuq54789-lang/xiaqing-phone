@@ -17,7 +17,6 @@
   --home-top:10px;       /* 整个桌面内容离屏幕顶部的距离（越大整体越往下） */
   --home-side:20px;      /* 桌面内容左右边距 */
   --clock-size:68px;     /* 大时钟字号 */
-  --clock-x:0px;         /* 时钟+日期整体 左右微调 */
   --clock-y:40px;         /* 时钟+日期整体 上下微调 */
   --date-size:15px;      /* 日期/农历/天气 字号 */
   --clock-gap:5px;      /* 时钟区 与 下面一周胶囊 的间距 */
@@ -274,11 +273,18 @@ button { cursor:pointer; }
 /* 桌面 */
 #s-home { background:radial-gradient(120% 60% at 50% 0%, color-mix(in srgb, var(--accent) 14%, var(--bg)) 0%, var(--bg) 70%); }
 .home { padding:calc(var(--home-top) + env(safe-area-inset-top)) var(--home-side) calc(130px + env(safe-area-inset-bottom)); }
-.hm-top { display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:var(--clock-gap); position:relative; left:var(--clock-x); top:var(--clock-y); }
-.hm-clock { position:relative; top:var(--hm-clock-dy,0px); font-size:var(--clock-size); font-weight:600; letter-spacing:-1px; line-height:1; color:var(--hm-clock-color, color-mix(in srgb, var(--ink) 70%, transparent)); font-variant-numeric:tabular-nums; }
+.hm-top {
+  display:flex;
+  justify-content:space-between;
+  align-items:flex-start;
+  margin-bottom:var(--clock-gap);
+  position:relative;
+  top:var(--clock-y);
+}
+.hm-clock { position:relative; left:var(--hm-clock-dx,0px); top:var(--hm-clock-dy,0px); font-size:var(--clock-size); font-weight:600; letter-spacing:-1px; line-height:1; color:var(--hm-clock-color, color-mix(in srgb, var(--ink) 70%, transparent)); font-variant-numeric:tabular-nums; }
 .hm-date { text-align:right; font-size:var(--date-size); line-height:1.9; color:var(--hm-date-color, color-mix(in srgb, var(--ink) 60%, transparent)); padding-top:6px; }
-#home-date, #home-lunar { position:relative; top:var(--hm-date-dy,0px); }
-#home-weather { position:relative; top:var(--hm-wx-dy,0px); color:var(--hm-wx-color, inherit); }
+#home-date, #home-lunar { position:relative; left:var(--hm-date-dx,0px); top:var(--hm-date-dy,0px); }
+#home-weather { position:relative; left:var(--hm-wx-dx,0px); top:var(--hm-wx-dy,0px); color:var(--hm-wx-color, inherit); }
 #s-home[data-cl=v] .hm-top { flex-direction:column; align-items:flex-start; }
 #s-home[data-cl=v] .hm-date { text-align:left; padding-top:4px; }
 #s-home { text-shadow:0 1px 3px rgba(0,0,0,.16); }

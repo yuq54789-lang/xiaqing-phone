@@ -107,7 +107,7 @@ var DEFAULTS = {
   scanDepth: 5, worldBookMaxChars: 6000, memoryLimit: 20, summaryMax: 200, defaultContext: 30, stickerPromptLimit: 60, autoReply: false, apiPresets: [], activePresetId: null, weather: null, homeLayout: null,
   bubbleSlow: 1,                 /* 气泡出现速度倍数：1=默认，越大越慢 */
   notifyUrl: '', notifyName: '', /* 消息提示音（网址 / 上传的文件名） */
-  clockLayout: 'h', clockColor: '', dateColor: '', wxColor: '', clockDy: 0, dateDy: 0, wxDy: 0,   /* 时钟：横/竖排、三处文字颜色、三处上下位置（互不绑定） */
+  clockLayout: 'h', clockColor: '', dateColor: '', wxColor: '', clockDy: 0, dateDy: 0, wxDy: 0, clockDx: 0, dateDx: 0, wxDx: 0,   /* 时钟：横/竖排、三处文字颜色、三处上下及左右位置（互不绑定） */
   iconUrls: {},                  /* 自定义桌面图标：{ 应用名: 图片网址或 data URI } */
   asrLang: 'zh-CN',              /* 语音识别语言 */
   showTime: true,                /* 每条气泡下面显示时间（几点几分） */
@@ -2762,7 +2762,8 @@ function applyTheme() {
   if (t && t.vars) {
     css += ':root{' + Object.keys(t.vars).map(function (k) { return '--' + k + ':' + t.vars[k] + ';'; }).join('') + '}\n';
   }
-  css += ':root{--hm-clock-dy:' + (Number(settings.clockDy) || 0) + 'px;--hm-date-dy:' + (Number(settings.dateDy) || 0) + 'px;--hm-wx-dy:' + (Number(settings.wxDy) || 0) + 'px;' +
+    css += ':root{--hm-clock-dy:' + (Number(settings.clockDy) || 0) + 'px;--hm-date-dy:' + (Number(settings.dateDy) || 0) + 'px;--hm-wx-dy:' + (Number(settings.wxDy) || 0) + 'px;' +
+    '--hm-clock-dx:' + (Number(settings.clockDx) || 0) + 'px;--hm-date-dx:' + (Number(settings.dateDx) || 0) + 'px;--hm-wx-dx:' + (Number(settings.wxDx) || 0) + 'px;' +
     (settings.clockColor ? '--hm-clock-color:' + settings.clockColor + ';' : '') + (settings.dateColor ? '--hm-date-color:' + settings.dateColor + ';' : '') + (settings.wxColor ? '--hm-wx-color:' + settings.wxColor + ';' : '') + '}\n';
   try { $('s-home').setAttribute('data-cl', settings.clockLayout === 'v' ? 'v' : 'h'); } catch (e) {}
   var wpSrc = homeBgFile || settings.homeBg;   /* 桌面壁纸：想改填充方式，改下面的 background-size / background-position */
@@ -2775,8 +2776,7 @@ function applyTheme() {
   st.textContent = css + (settings.customCss || '');
 }
 /* ---- 美化预设：把「方案 / 壁纸 / 字体 / 自定义 CSS / 提示音 / 桌面图标」一起存起来，一键切换 ---- */
-var BEAUTY_KEYS = ['clockLayout', 'clockColor', 'dateColor', 'wxColor', 'clockDy', 'dateDy', 'wxDy', 'themeId', 'customCss', 'homeBg', 'fontUrl', 'fontData', 'fontName', 'notifyUrl', 'notifyName', 'iconUrls'];
-function cloneJ(v) { return v === undefined ? v : JSON.parse(JSON.stringify(v)); }
+var BEAUTY_KEYS = ['clockLayout', 'clockColor', 'dateColor', 'wxColor', 'clockDy', 'dateDy', 'wxDy', 'clockDx', 'dateDx', 'wxDx', 'themeId', 'customCss', 'homeBg', 'fontUrl', 'fontData', 'fontName', 'notifyUrl', 'notifyName', 'iconUrls'];function cloneJ(v) { return v === undefined ? v : JSON.parse(JSON.stringify(v)); }
 function beautySnapshot() {
   var o = {}; BEAUTY_KEYS.forEach(function (k) { o[k] = cloneJ(settings[k] !== undefined ? settings[k] : DEFAULTS[k]); });
   o.homeBgFile = homeBgFile || ''; o.notifyFile = notifyFile || ''; return o;
@@ -2853,9 +2853,23 @@ onShow['s-beauty'] = function () {
     r.addEventListener('change', function () { saveSettings(); });
     return field(label, h('div', { class: 'rng' }, r, v));
   }
+    function dxRow(label, key) {
+    var v = h('span', { class: 'val', text: (Number(settings[key]) || 0) + 'px' });
+    var r = h('input', { type: 'range', min: '-200', max: '200', step: '1', value: String(Number(settings[key]) || 0) });
+    r.addEventListener('input', function () {
+      settings[key] = Number(r.value);
+      v.textContent = r.value + 'px';
+      applyTheme();
+    });
+    r.addEventListener('change', function () { saveSettings(); });
+    return field(label, h('div', { class: 'rng' }, r, v));
+  }
   clk.appendChild(colorRow('时钟颜色', 'clockColor')); clk.appendChild(colorRow('日期颜色', 'dateColor')); clk.appendChild(colorRow('天气颜色', 'wxColor'));
   clk.appendChild(dyRow('时钟 上下位置', 'clockDy')); clk.appendChild(dyRow('日期 上下位置', 'dateDy')); clk.appendChild(dyRow('天气 上下位置', 'wxDy'));
-  clk.appendChild(h('div', { class: 'bt-hint', text: '三处的颜色、上下位置各自独立，互不影响；桌面文字自带一层很淡的投影，换什么壁纸都看得清。' }));
+  clk.appendChild(dxRow('时钟 左右位置', 'clockDx'));
+  clk.appendChild(dxRow('日期 左右位置', 'dateDx'));
+  clk.appendChild(dxRow('天气 左右位置', 'wxDx'));
+  clk.appendChild(h('div', { class: 'bt-hint', text: '三处的颜色、上下及左右位置各自独立，互不影响；桌面文字自带一层很淡的投影，换什么壁纸都看得清。' }));
   body.appendChild(clk);
   var wpSrc = homeBgFile || settings.homeBg;
   var wp = h('div', { class: 'bg-prev', text: wpSrc ? '' : '未设置桌面壁纸' });
