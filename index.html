@@ -3,13 +3,14 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#f6f5f2">
+<meta name="theme-color" content="#00000000">
 <title>夏青phone</title>
 <link rel="manifest" href="manifest.json">
 <link rel="icon" href="icon-192.png">
 <link rel="apple-touch-icon" href="icon-192.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="夏青Phone">
 <link rel="stylesheet" href="style.css">
 </head>
@@ -33,6 +34,16 @@
     <div id="char-list" class="scroll"></div>
   </section>
 
+  <section class="screen" id="s-moments">
+    <header class="bar"><button class="icon" data-back aria-label="返回">‹</button><h1>朋友圈</h1></header>
+    <div class="scroll"><div class="pad" id="moments-body"></div></div>
+  </section>
+
+  <section class="screen" id="s-me">
+    <header class="bar"><button class="icon" data-back aria-label="返回">‹</button><h1>个人主页</h1></header>
+    <div class="scroll"><div class="pad" id="me-body"></div></div>
+  </section>
+
   <section class="screen" id="s-chat">
     <div id="chat-bg"></div>
     <header class="bar">
@@ -45,13 +56,11 @@
     <div id="quote-bar" hidden><span id="quote-text"></span><button type="button" id="quote-x" aria-label="取消引用">✕</button></div>
     <div id="selbar" hidden><span id="sel-n">已选 0 条</span><button type="button" class="pill ghost" id="sel-edit">编辑</button><button type="button" class="pill ghost" id="sel-copy">复制</button><button type="button" class="pill ghost" id="sel-del">删除</button><button type="button" class="pill" id="sel-cancel">取消</button></div>
     <form id="composer" autocomplete="off">
-      <button type="button" class="icon" id="b-sticker" aria-label="表情包">☺</button>
-      <div class="inwrap">
-        <textarea id="input" rows="1" placeholder="说点什么…"></textarea>
-        <button type="button" class="pill ghost" id="b-wait">等回复</button>
-        <button type="submit" class="pill" id="b-send">发送</button>
-      </div>
-      <button type="button" class="icon" id="b-plus" aria-label="更多">＋</button>
+      <button type="button" class="cbtn" id="b-sticker" aria-label="表情包"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M8.5 14a4 4 0 0 0 7 0M9 9.5h.01M15 9.5h.01"/></svg></button>
+      <textarea id="input" rows="1" placeholder="说点什么…"></textarea>
+      <button type="button" class="cbtn" id="b-wait" aria-label="等回复"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5.5h16v11H9.5L5 20v-3.5H4z"/><path d="M8.5 11h.01M12 11h.01M15.5 11h.01" stroke-width="2.6"/></svg></button>
+      <button type="submit" class="cbtn primary" id="b-send" aria-label="发送"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M21 3L10.5 13.5"/><path d="M21 3l-6.5 18-4-7.5L3 9.5z"/></svg></button>
+      <button type="button" class="cbtn" id="b-plus" aria-label="更多"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg></button>
     </form>
     <div id="plusmenu" hidden><div class="stack" id="plus-stack"></div></div>
   </section>
@@ -108,6 +117,11 @@
   <section class="screen" id="s-stickers">
     <header class="bar"><button class="icon" data-back>‹</button><h2>表情包</h2><button class="txt-btn" id="b-stk-add">＋ 添加</button></header>
     <div class="scroll"><div class="pad" id="stk-body"></div></div>
+  </section>
+
+  <section class="screen" id="s-membooks">
+    <header class="bar"><button class="icon" data-back>‹</button><h2>记忆</h2></header>
+    <div class="scroll"><div class="pad" id="membooks-body"></div></div>
   </section>
 
   <section class="screen" id="s-thoughts">
