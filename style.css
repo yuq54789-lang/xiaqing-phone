@@ -81,6 +81,41 @@ button { cursor:pointer; }
 .bar { display:flex; align-items:center; gap:8px; padding:calc(10px + env(safe-area-inset-top)) 12px 10px; border-bottom:1px solid var(--line); background:var(--bg); flex:none; }
 .bar h1,.bar h2 { margin:0; font-size:17px; font-weight:600; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .bar h1 { font-size:20px; letter-spacing:.5px; }
+#chat-title {
+  display:flex;
+  flex-direction:column;
+  align-items:flex-start;
+  justify-content:center;
+  gap:3px;
+  min-width:0;
+}
+
+#chat-name {
+  font-size:17px;
+  line-height:1.2;
+}
+
+#chat-status {
+  font-size:11px;
+  line-height:1.2;
+  font-weight:400;
+  color:var(--sub);
+}
+#chat-status[data-status="online"] {
+  color:#35b86b;
+}
+
+#chat-status[data-status="busy"] {
+  color:#e5a93d;
+}
+
+#chat-status[data-status="away"] {
+  color:var(--sub);
+}
+
+#chat-status[data-status="sleeping"] {
+  color:#9b8bd8;
+}
 .icon { border:0; background:none; font-size:22px; width:36px; height:36px; border-radius:18px; line-height:1; color:var(--ink); }
 .icon:active { background:var(--line); }
 .txt-btn { border:0; background:none; color:var(--accent); font-size:15px; padding:6px 8px; }

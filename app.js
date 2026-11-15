@@ -209,6 +209,7 @@ function fmtTime(ts, tz) {
 function buildSystem(ctx) {
   var c = ctx.char, s = ctx.settings, L = [];
   L.push('你正在扮演「' + (c.realName || c.name) + '」，' + (c.offlineMode ? '和用户面对面相处。' : '通过手机和用户聊天。'));
+  L.push('# 角色在线状态\n每次回复结束时，额外输出一段状态标记，必须严格使用以下格式：<状态>{"type":"online","text":"刚刚在和你聊天"}</状态>\n状态类型只能从 online、busy、away、sleeping 中选择：online 表示在线，busy 表示忙碌，away 表示暂时离开，sleeping 表示睡眠。text 由你根据当前情绪、活动、剧情和角色设定自由编写，简短自然，最多 16 个字。状态类型不必每次改变，只有符合当前情境时才切换。状态标记必须放在整条回复的最后，不要放进聊天正文，也不要向用户解释这个标记。');
   if (c.persona) L.push('# 角色设定\n' + c.persona);
   var me = [];
   if (c.userNickname) me.push('你称呼用户为：' + c.userNickname);
@@ -542,6 +543,24 @@ function extractDictation(text) {
   var i = reply.indexOf('<听写>');   /* 被截断、没写结束标签：取到这一行结束 */
   if (i !== -1) { var rest = reply.slice(i + 4), nl = rest.indexOf('\n'); texts.push((nl === -1 ? rest : rest.slice(0, nl)).trim()); reply = reply.slice(0, i) + (nl === -1 ? '' : rest.slice(nl + 1)); }
   return { texts: texts, reply: reply.replace(/^\s+/, '') };
+}
+function extractStatus(text) {
+  var t = String(text || ''), status = null;
+  var m = t.match(/<状态>([\s\S]*?)<\/状态>/);
+  if (m) {
+    t = t.replace(m[0], '');
+    try {
+      var o = JSON.parse(m[1].trim());
+      var types = ['online', 'busy', 'away', 'sleeping'];
+      if (types.indexOf(o.type) !== -1 && typeof o.text === 'string') {
+        status = { type: o.type, text: o.text.trim().slice(0, 16) };
+      }
+    } catch (e) {}
+  } else {
+    var i = t.indexOf('<状态>');
+    if (i !== -1) t = t.slice(0, i);
+  }
+  return { reply: t.trim(), status: status };
 }
 function extractThought(text) {
   var t = String(text || ''), th = null, reply = t, m = t.match(/<心声>([\s\S]*?)<\/心声>/);
@@ -1443,9 +1462,19 @@ function messageMenu(m, anchor) {
 
 function isTyping(cid) { var r = rounds[cid]; return !!(r && r.active); }
 function refreshTitle() {
-  var t = $('chat-title'); if (!cur) return;
-  if (isTyping(cur.id)) { t.className = 'typing-title'; t.innerHTML = '对方正在输入中<i>.</i><i>.</i><i>.</i>'; }
-  else { t.className = ''; t.textContent = cur.name + (cur.offlineMode ? ' · 线下' : ''); }
+  if (!cur) return;
+  var name = $('chat-name'), status = $('chat-status');
+  name.textContent = cur.name + (cur.offlineMode ? ' · 线下' : '');
+  var s = cur.status || { type: 'online', text: '在线' };
+  status.textContent = s.text || '在线';
+  status.setAttribute('data-status', s.type || 'online');
+  if (isTyping(cur.id)) {
+    name.className = 'typing-title';
+    name.innerHTML = '对方正在输入中<i>.</i><i>.</i><i>.</i>';
+  } else {
+    name.className = '';
+    name.textContent = cur.name + (cur.offlineMode ? ' · 线下' : '');
+  }
 }
 function appendMsgNode(node) { $('msgs').appendChild(node); }
 
@@ -2050,10 +2079,16 @@ async function generateReply(fresh) {
     });
     if (!r.active || r.won) return;
     var dict = extractDictation(text);   /* 用户语音的文字也随回复一起回来，不另外请求 */
-    var ex = extractThought(dict.reply), replyText = ex.reply;   /* 心声同理 */
+    var st = extractStatus(dict.reply);
+    var ex = extractThought(st.reply), replyText = ex.reply;   /* 心声同理 */
     var items = char.offlineMode ? (replyText.trim() ? [{ type: 'offline', content: replyText.trim() }] : []) : parseReplyLines(splitReply(replyText, 12), prompt.pool, !!char.aiVoice), base = Date.now(), saved = [];
     if (!items.length) throw new Error('模型的回复里没有可显示的内容（只有找不到的表情包）。原始回复：' + text.slice(0, 200));
     r.won = true;
+    if (st.status) {
+      char.status = st.status;
+      await dbPut('characters', char);
+      refreshTitle();
+    }
     items.forEach(function (it, i) {
       var m = { id: uid(char.id), characterId: char.id, role: 'assistant', type: it.type, content: it.content, ts: base + i };
       if (it.meta) m.meta = it.meta; saved.push(m);
