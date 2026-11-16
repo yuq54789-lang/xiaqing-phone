@@ -143,8 +143,8 @@ button { cursor:pointer; }
 .row .avatar { width:34px; height:34px; font-size:14px; }
 .bubble { max-width:76%; padding:8px 12px; border-radius:16px; background:var(--them); box-shadow:var(--shadow); white-space:pre-wrap; word-break:break-word; border:1px solid var(--line); }
 .row.me .bubble { background:var(--me); border-color:transparent; }
-.bubble.sticker { padding:4px; background:transparent; border-color:transparent; box-shadow:none; }
-.bubble.sticker img { max-width:140px; max-height:140px; border-radius:10px; display:block; }
+.bubble.sticker { padding:0; background:transparent !important; border:0 !important; box-shadow:none !important; }
+.bubble.sticker img { max-width:110px; max-height:110px; width:auto; height:auto; border-radius:8px; object-fit:contain; display:block; }
 .bubble.sticker .alt { color:var(--sub); font-size:13px; padding:6px 8px; }
 .bubble.transfer { background:#e9a23b; color:#2b1b00; border:0; min-width:170px; }
 .bubble.transfer b { font-size:18px; display:block; }
@@ -701,3 +701,102 @@ input, textarea, [contenteditable], #errpop .e-body, .selectable { -webkit-user-
 .lp-l.none { padding:30px 0; }
 .lp-ctl { display:flex; align-items:center; justify-content:center; gap:14px; margin-top:6px; }
 .lp-end { border:1px solid var(--line); background:none; color:var(--sub); border-radius:16px; padding:6px 14px; font-size:13px; }
+
+/* =====================================================================
+ * 全局卡片化：二级页面浅灰底 + 悬浮毛玻璃圆角卡片（聊天页、桌面不动）
+ * ===================================================================== */
+:root {
+  --gbg:#F2F4F7; --gcard:rgba(255,255,255,.75); --gline:rgba(255,255,255,.9); --gshadow:0 4px 16px rgba(0,0,0,.04); --gdiv:rgba(0,0,0,.06);
+}
+@media (prefers-color-scheme: dark) {
+  :root { --gbg:#151412; --gcard:rgba(40,37,33,.75); --gline:rgba(255,255,255,.08); --gshadow:0 4px 16px rgba(0,0,0,.25); --gdiv:rgba(255,255,255,.08); }
+}
+#s-list, #s-period, #s-music, #s-search, #s-chatset, #s-beauty, #s-settings, #s-char, #s-memory, #s-backup, #s-stickers,
+#s-membooks, #s-thoughts, #s-wblist, #s-prlist, #s-predit, #s-wbedit { background:var(--gbg); }
+#s-list > .bar, #s-period > .bar, #s-music > .bar, #s-search > .bar, #s-chatset > .bar, #s-beauty > .bar, #s-settings > .bar, #s-char > .bar, #s-memory > .bar,
+#s-backup > .bar, #s-stickers > .bar, #s-membooks > .bar, #s-thoughts > .bar, #s-wblist > .bar, #s-prlist > .bar, #s-predit > .bar, #s-wbedit > .bar
+  { background:var(--gbg); border-bottom:0; }
+#s-list .ltabs { background:var(--gbg); }
+
+/* 卡片材质 */
+:is(#s-period, #s-music, #s-search, #s-chatset, #s-beauty, #s-settings, #s-char, #s-memory, #s-backup, #s-stickers, #s-membooks, #s-thoughts, #s-wblist, #s-prlist, #s-predit, #s-wbedit) :is(.group, .glass, .mo-feed.in-card) {
+  background:var(--gcard); 
+  border:1px solid var(--gline); border-radius:18px; box-shadow:var(--gshadow);
+}
+:is(#s-period, #s-music, #s-search, #s-chatset, #s-beauty, #s-settings, #s-char, #s-memory, #s-backup, #s-stickers, #s-membooks, #s-thoughts, #s-wblist, #s-prlist, #s-predit, #s-wbedit) .group { margin:12px 2px 16px; }
+:is(#s-period, #s-music, #s-search, #s-chatset, #s-beauty, #s-settings, #s-char, #s-memory, #s-backup, #s-stickers, #s-membooks, #s-thoughts, #s-wblist, #s-prlist, #s-predit, #s-wbedit) .glass { margin:12px 2px; padding:14px 16px; }
+:is(#s-period, #s-music, #s-search, #s-chatset, #s-beauty, #s-settings, #s-char, #s-memory, #s-backup, #s-stickers, #s-membooks, #s-thoughts, #s-wblist, #s-prlist, #s-predit, #s-wbedit) .group-title { padding:0 20px 2px; margin-top:6px; }
+:is(#s-period, #s-music, #s-search, #s-chatset, #s-beauty, #s-settings, #s-char, #s-memory, #s-backup, #s-stickers, #s-membooks, #s-thoughts, #s-wblist, #s-prlist, #s-predit, #s-wbedit) :is(.field, .item) { border-bottom-color:var(--gdiv); }
+/* 胶囊：按钮 / 输入 */
+:is(#s-period, #s-music, #s-search, #s-chatset, #s-beauty, #s-settings, #s-char, #s-memory, #s-backup, #s-stickers, #s-membooks, #s-thoughts, #s-wblist, #s-prlist, #s-predit, #s-wbedit) .btn:not(.primary):not(.danger) {
+  background:var(--gcard);  border:1px solid var(--gline); border-radius:999px; box-shadow:var(--gshadow);
+}
+:is(#s-period, #s-music, #s-search, #s-chatset, #s-beauty, #s-settings, #s-char, #s-memory, #s-backup, #s-stickers, #s-membooks, #s-thoughts, #s-wblist, #s-prlist, #s-predit, #s-wbedit) .btn { border-radius:999px; }
+
+/* 聊天列表：每个角色一张独立悬浮胶囊卡片，没有分割线 */
+#char-list { padding:6px 0 16px; }
+#char-list .char {
+  margin:0 16px 11px; padding:12px 16px; border-bottom:0; border-radius:20px;
+  background:var(--gcard); 
+  border:1px solid var(--gline); box-shadow:var(--gshadow);
+}
+#char-list .char:active { background:color-mix(in srgb, var(--gcard) 70%, var(--line)); }
+#char-list .char.pinned { background:color-mix(in srgb, var(--accent) 9%, var(--gcard)); }
+#char-list .char .ubadge { right:16px; }
+
+.bubble.transfer { display:flex; flex-direction:column; gap:2px; min-width:170px; }
+.bubble.transfer small { opacity:.65; font-size:11px; margin-top:4px; border-top:1px solid rgba(0,0,0,.12); padding-top:4px; }
+.bubble.transfer.done { background:#d9c9a8; opacity:.85; }
+.pd-card { text-align:center; padding:22px 16px !important; }
+.pd-big { font-size:24px; font-weight:700; color:var(--accent); }
+.pd-sub { margin-top:6px; color:var(--sub); font-size:13px; }
+#s-period .field.inline input { width:80px; text-align:right; border:0; background:transparent; outline:none; font-size:16px; }
+
+/* AI 语音条：声波 */
+.bubble.vmsg { cursor:pointer; }
+.bubble.vmsg .vbar { display:flex; align-items:center; justify-content:space-between; gap:2px; height:22px; background:none; flex:1; min-width:70px; }
+.bubble.vmsg .vbar i { display:block; width:3px; height:6px; border-radius:2px; background:color-mix(in srgb, var(--ink) 40%, transparent); }
+.bubble.vmsg .vbar i:nth-child(3n) { height:12px; } .bubble.vmsg .vbar i:nth-child(4n+1) { height:9px; }
+.bubble.vmsg.playing .vbar i { background:var(--accent); animation:vwave .8s ease-in-out infinite; }
+.bubble.vmsg.playing .vbar i:nth-child(2n) { animation-delay:.15s; } .bubble.vmsg.playing .vbar i:nth-child(3n) { animation-delay:.3s; } .bubble.vmsg.playing .vbar i:nth-child(5n) { animation-delay:.45s; }
+.bubble.vmsg.loading .vbar { opacity:.5; }
+@keyframes vwave { 0%,100% { transform:scaleY(.5); } 50% { transform:scaleY(2.2); } }
+
+/* 音乐页：顶部操作区固定，只有下面的歌曲列表滚动 */
+#s-music > #music-top { flex:none; padding:0 16px 2px; }
+#s-music > #music-top .group { margin:4px 0 6px; }
+#s-music > #music-top .group-title { padding:0 4px 2px; }
+#s-music > .scroll { flex:1; min-height:0; overflow-y:auto; }
+#s-music .bar .icon svg { display:block; }
+
+/* 一起听：迷你椭圆 / 拖动 / 顶栏歌词 */
+#s-chat > #listen-pop { overflow:hidden; height:50px; border-radius:25px; -webkit-backdrop-filter:none; backdrop-filter:none; background:var(--card);
+  transition:width .3s cubic-bezier(.4,.1,.2,1), height .3s cubic-bezier(.4,.1,.2,1), left .3s cubic-bezier(.4,.1,.2,1), top .3s cubic-bezier(.4,.1,.2,1), border-radius .3s; }
+#s-chat > #listen-pop.open { height:auto; border-radius:26px; }
+#s-chat > #listen-pop .lp-pill { touch-action:none; cursor:grab; height:50px; box-sizing:border-box; }
+#s-chat > #listen-pop.dragging { box-shadow:0 12px 32px rgba(0,0,0,.28); transition:none; }
+#s-chat > #listen-pop .lp-txt { max-width:300px; transition:opacity .2s, max-width .3s; white-space:nowrap; overflow:hidden; }
+#s-chat > #listen-pop #lp-play { transition:opacity .2s, max-width .3s, margin .3s; max-width:44px; overflow:hidden; }
+#s-chat > #listen-pop.ball { width:70px; height:46px; border-radius:23px; }
+#s-chat > #listen-pop.ball .lp-pill { padding:0; gap:0; height:46px; justify-content:center; align-items:center; }
+#s-chat > #listen-pop.ball .lp-txt, #s-chat > #listen-pop.ball #lp-play { max-width:0; opacity:0; margin:0; padding:0; flex:0 0 0; pointer-events:none; }
+#s-chat > #listen-pop.ball .lp-more { display:none; }
+#s-chat > #listen-pop.ball .lp-avs .avatar { width:30px; height:30px; font-size:12px; }
+#s-chat > #listen-pop.ball .lp-avs .avatar + .avatar { margin-left:-11px; }
+/* 呼吸：改成圆环缩放+淡出（只动 transform/opacity，不再动 box-shadow，预览里不闪） */
+.lp-avs { position:relative; animation:none !important; }
+.lp-avs::after { content:''; position:absolute; inset:-3px; border-radius:30px; border:2px solid var(--accent); opacity:0; pointer-events:none; animation:lpring 2.6s ease-out infinite; }
+#listen-pop.paused .lp-avs::after { animation:none; }
+@keyframes lpring { 0% { transform:scale(.96); opacity:.55; } 80%,100% { transform:scale(1.18); opacity:0; } }
+.lp-ctl .lp-mode { width:34px; height:34px; }
+#s-chat > #lp-top { display:none; position:absolute; z-index:26; top:calc(env(safe-area-inset-top) + 10px); left:50%; transform:translate(calc(-50% + var(--dx, 0px)), var(--dy, 0px));
+  width:min(44vw, 190px); text-align:center; touch-action:none; user-select:none; -webkit-user-select:none; -webkit-touch-callout:none; transition:transform .15s, filter .15s; }
+#s-chat > #lp-top.on { display:block; }
+#s-chat > #lp-top .mu-name { font-size:12px; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+#s-chat > #lp-top .mu-lrc { font-size:12px; color:var(--accent); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-height:16px; }
+#s-chat > #lp-top.drag { transform:translate(calc(-50% + var(--dx, 0px)), var(--dy, 0px)) scale(1.08); filter:drop-shadow(0 4px 10px rgba(0,0,0,.3)); transition:none; background:color-mix(in srgb, var(--card) 85%, transparent); border-radius:12px; padding:4px 6px; }
+/* 全局卡片：去掉毛玻璃模糊（背景是纯色，模糊看不出来，却会让翻页卡顿） */
+:is(#s-period, #s-music, #s-search, #s-chatset, #s-beauty, #s-settings, #s-char, #s-memory, #s-backup, #s-stickers, #s-membooks, #s-thoughts, #s-wblist, #s-prlist, #s-predit, #s-wbedit) .glass { -webkit-backdrop-filter:none; backdrop-filter:none; }
+
+/* 聊天记录很长时：屏幕外的消息不参与排版/绘制 */
+#msgs > .row { content-visibility:auto; contain-intrinsic-size:auto 64px; }

@@ -89,7 +89,7 @@ function countMessagesAfter(cid, ts) {
 
 /* ---------- 设置 ---------- */
 /* 系统提示词里的「回复要求」：内置在代码里，不在界面上显示 */
-var OUTPUT_RULES = '像真人在手机上聊天一样回复：口语化，简短自然。\n把回复拆成几条短消息，每条消息单独一行（最多 6 条）。\n想引用用户说过的某句话来回复时，在那条消息开头写 [引用：用户原话片段]，后面接你的回复，同一行；偶尔用就好。\n不要在开头写你的名字，不要写旁白、括号动作或解释，除非角色设定要求这样。\n始终保持角色设定，不要承认自己是 AI。';
+var OUTPUT_RULES = '像真人在手机上聊天一样回复：口语化，简短自然。\n把回复拆成几条短消息，每条消息单独一行（最多 50 条）。\n想引用用户说过的某句话来回复时，在那条消息开头写 [引用：用户原话片段]，后面接你的回复，同一行；偶尔用就好。\n不要在开头写你的名字，不要写旁白、括号动作或解释，除非角色设定要求这样。\n始终保持角色设定，不要承认自己是 AI。';
 /* 线下模式：面对面的小说式叙述，不拆气泡、不发表情包 */
 var OFFLINE_RULES = '现在是线下场景，你和用户面对面相处，不再是手机聊天。\n用小说式的叙述回复：用第三人称写角色的动作、神态、环境，对白用「」括起来，连贯地写成一段或几段文字。\n篇幅 {{MIN}} 到 {{MAX}} 字，一次写完，不要拆成多条消息，不要发表情包，不要用你的名字做开头。\n只写角色自己的言行和感受，不要替用户说话、替用户做动作。\n始终保持角色设定，不要承认自己是 AI。';
 /* 线下模式的完整规则 = 内置规则（字数按角色设置填） + 你选的预设（文风/格式要求） */
@@ -108,7 +108,7 @@ var DEFAULTS = {
   baseUrl: '', apiKey: '', model: '', temperature: 0.8,
   stream: false, themeId: 'default', customCss: '', homeBg: '', fontUrl: '', fontData: '', fontName: '',
   secBaseUrl: '', secApiKey: '', secModel: '',
-  scanDepth: 5, worldBookMaxChars: 6000, memoryLimit: 20, summaryMax: 200, defaultContext: 30, stickerPromptLimit: 60, autoReply: false, myProfile: null, musicApi: '', musicApiBackup: '', apiPresets: [], activePresetId: null, weather: null, homeLayout: null,
+  scanDepth: 5, worldBookMaxChars: 6000, memoryLimit: 20, summaryMax: 200, defaultContext: 30, stickerPromptLimit: 60, autoReply: false, period: null, myProfile: null, musicApi: '', musicApiBackup: '', apiPresets: [], activePresetId: null, weather: null, homeLayout: null,
   bubbleSlow: 1,                 /* 气泡出现速度倍数：1=默认，越大越慢 */
   notifyUrl: '', notifyName: '', /* 消息提示音（网址 / 上传的文件名） */
   clockLayout: 'h', clockColor: '', dateColor: '', wxColor: '', clockDy: 0, dateDy: 0, wxDy: 0, clockDx: 0, dateDx: 0, wxDx: 0,   /* 时钟：横/竖排、三处文字颜色、三处上下及左右位置（互不绑定） */
@@ -219,7 +219,7 @@ function buildSystem(ctx) {
   if (c.userNickname) me.push('你称呼用户为：' + c.userNickname);
   if (c.userPersona) me.push(c.userPersona);
   if (me.length) L.push('# 用户\n' + me.join('\n'));
-  if (ctx.entries.length) {
+  if (ctx.entries.length && !ctx.wbLate) {
     L.push('# 世界书（当前相关的设定）\n' + ctx.entries.map(function (e) {
       return '【' + (e.title || e.book) + '】\n' + e.content;
     }).join('\n\n'));
@@ -243,6 +243,8 @@ function buildSystem(ctx) {
   L.push('# 回复要求\n' + (c.offlineMode ? offlineRules(c, ctx.preset) : OUTPUT_RULES));
   if (ctx.wantThought) L.push('# 心声（附加输出）\n' + THOUGHT_RULES);
   if (ctx.musicText) L.push(ctx.musicText);
+  if (!c.offlineMode) L.push('# 拍一拍与转账\n' + ACT_RULES);
+  if (ctx.periodText) L.push(ctx.periodText);
   if (ctx.momentsText) L.push(ctx.momentsText + '\n\n# 朋友圈（附加输出）\n' + MOMENT_RULES);
   if (ctx.changes) L.push('# 消息的变动\n用户有时会撤回、删除或编辑消息。方括号里的「[用户撤回了一条消息。撤回前的内容：…]」「[用户删除了…]」和消息后面的「（…原文是…）」就是你看到的变动，你确实知道原来写了什么。像真人一样自然地反应（好奇、调侃、装作没看见都行，看角色性格），不要机械复述这些提示，也不要每次都点破。');
   if (c.aiVoice && !c.offlineMode) L.push('# 发语音\n想发语音消息时，把那一条单独写成一行：[语音：说的话]。方括号里就是语音里说的原话（口语、带语气词），会自动显示成文字，不用再重复。偶尔用，适合轻声说话、撒娇、叹气、情绪起伏的时候；每次回复最多 1 条。');
@@ -422,7 +424,8 @@ function geminiParts(c) {
     return { text: p.text || '' };
   });
 }
-async function callLLM(o) {
+async function callLLM(o) { var r0 = await callLLMRaw(o); return typeof r0 === 'string' ? stripThinking(r0) : r0; }
+async function callLLMRaw(o) {
   var gem = isGemini(o.base), url, headers = { 'Content-Type': 'application/json' }, body;
   if (!o.base || !o.model) throw new Error('请先在「设置」里填写反代地址和模型');
   if (gem) {
@@ -588,7 +591,7 @@ if (typeof module !== 'undefined') module.exports = { extractMusicCmd: extractMu
 
 /* ---------- ⑤ 界面 ---------- */
 var $ = function (id) { return document.getElementById(id); };
-var I18N_KEYS = ["API 设置", "API 设置里有 Key，导出时默认不勾，需要的话自己勾上并保管好文件。", "API设置", "JSON 保留全部信息（含是否启用）；txt 和 Word 是可读格式，方便自己编辑后再导入。", "JSON 保留全部信息；txt 和 Word 用「# 预设名」分隔，方便自己编辑后再导入。", "一起听歌（关联桌面「网易云音乐」）还在开发中", "上下文", "上下文与记忆", "上传", "上传原图", "上传图片", "上传字体文件", "上传本地图片（可多选，自动压缩）", "上传音频", "下载应急备份文件", "不使用预设（只用内置写作要求）", "不保存", "不保存（还原）", "不分类", "不认识这个文件：不是 myphone-v1，也不是 EPhone 备份", "世界书", "世界书名称", "世界书扫描深度、记忆条数、气泡速度、通知等", "主 API（对话）", "主按钮", "主题、壁纸、字体、提示音、图标、CSS 及各种美化预设", "今天有点冷，你出门穿厚点。", "从应急备份恢复", "你在 TA 面前是谁", "你的人设", "保存", "保存为常驻", "保存为精炼记忆", "保存并离开", "允许角色发语音", "先不用", "先输入城市名", "全不选", "全选", "关键词", "关键词，用逗号分隔；留空 = 一直带入", "关键词，逗号分隔；留空 = 一直带入", "关闭", "其它设置", "内容", "删除", "删除分类", "删除条目", "删除此条目", "删除这个角色", "删除这个预设", "删除这本世界书", "副 API（总结、精炼记忆；留空则用主 API）", "加载更早的消息", "发现应急备份", "发语音给 AI 的方式", "发送", "取消", "取消引用", "另存为新预设", "只删分类（表情包移到「未分类」）", "只发文字 + 语气提示", "只针对这个角色。导出的文件可以导入到同一个角色，或换设备后导回来。", "合并", "合并：保留现有记录，只补上没有的（相同的消息不会重复）。覆盖：先清空这个角色现有的全部聊天记录再导入。", "合并：保留现有，同 ID 的被覆盖", "名称和网址都要填", "名称（也是让角色认识它的描述，如：委屈巴巴）", "含 API Key，请自己保管", "启用", "回复字数：最多", "回复字数：最少", "图片网址 https://…", "图片读取失败", "壁纸图片网址 https://…", "备份中…", "复制", "复制失败", "夏青phone", "夜间", "套用我的人设预设…", "好", "好～知道啦", "字体文件网址（.ttf / .otf / .woff2）", "字体文件超过 12MB，太大了，换个精简版或用网址", "字体（应用到所有页面）", "存为预设", "存为预设（保存当前这一项）", "完成", "完整备份", "完整导出（含图片和语音）", "定位失败：请允许定位权限，或直接输入城市", "对方说的语言", "导入", "导入中…", "导入中，请稍候…", "导入备份文件（自动识别格式）", "导入失败", "导入完成", "导入所选分区…", "导入方式", "导入聊天记录", "导入（json / txt / Word）", "导出", "导出全部（不含 API Key）", "导出全部（含 API Key）", "导出所选分区", "导出结果 JSON", "导出结果 TXT", "导出聊天记录", "已保存", "已删除", "已加入预设，记得点右上角「保存」", "已复制", "已应用", "已恢复", "已恢复默认排列", "已清空", "已移动", "已设置", "已转文字", "已选 0 条", "应急备份（防网页崩溃 / 数据被清）", "应用并保存", "应用网址", "应用这个预设（当前没存成预设的美化会被替换）", "开启", "开启后角色用小说式长文回复，不拆气泡、不发表情包", "开启线下模式", "开始导入", "开始精炼", "引用", "当前预设", "心声", "心声跟着 TA 的回复一起生成，不会多发一次请求；只是每次回复末尾多一小段", "心声（点聊天里角色的头像查看）", "总结", "恢复", "恢复默认", "批量导入表情包", "批量导入（粘贴 / txt / Word）", "把最新心声放进提示词，言行会更一致，但会多花一点 token", "抹茶", "拉取模型列表", "挂载世界书", "按分区导出 / 导入", "提示词占用（估算）", "搜索…", "搜索并使用", "搜索聊天记录", "搜索聊天记录…", "搜索，或直接输入模型名", "撤回", "播放失败", "播放失败：音频格式不支持或网址打不开", "播放语音", "支持本小手机导出的 myphone-v1 文件，也支持 EPhone 旧小手机的备份（会自动转换）。导入时可以勾选只导入哪些分区。", "改名（也是角色认识它的描述）", "放弃", "数据备份", "文件不是有效的 JSON", "文件不是有效的 JSON（或太大，手机内存不够）", "文件里没有可导入的内容", "新世界书", "新增记忆", "新建表情包分类", "新建角色", "新角色", "新预设", "显示名", "更多", "更换", "朗读语音", "未分类", "条目标题", "条目（可选）", "查看全部心声 ›", "标题", "桌面图标（自定义图片；回到桌面后生效）", "桌面壁纸（推荐用网址，不占本机空间；上传的是原图，不压缩）", "樱粉", "次按钮", "正在导出…", "正在总结…", "正在总结中，请稍等", "正在恢复…", "正在精炼…", "正在读取文件…", "正在转文字…", "每新增多少条消息总结一次", "每次回复都更新心声", "每次带最近多少条消息", "气泡字体大小", "气泡自定义 CSS（只对这个角色的聊天页生效）", "没找到应急备份", "没找到聊天记录（需要本软件导出的聊天记录文件）", "没找到这个城市", "没有匹配的", "没有可导出的消息", "没有应急备份", "没有通知权限，后台通知不会弹出", "没有需要总结的新消息", "没识别出文字", "没识别出文字。可以试试「用 API 转文字」", "没读到任何「名称 网址」", "浏览器自带", "消息提示音（角色每发一条消息响一声）", "添加", "添加表情包", "清空", "清除", "温度", "照片小组件", "用应急备份覆盖现在的全部数据？", "用当前内容覆盖它", "用当前定位", "用当前美化覆盖它", "用户人设", "用系统录音机录", "直接发音频（Gemini 等能听的模型）", "看手机", "看手机还在开发中", "看手机（关联桌面「看手机」）还在开发中", "移到其他分类", "移到哪个分类", "移除", "移除照片", "立即备份一次", "等回复", "管理", "管理预设", "精炼", "精炼失败", "精炼结果（可编辑）", "精炼记忆", "精简导出（不含图片和语音文件，更小）", "线下模式（小说式长文回复）", "线下预设", "统计中…", "继续编辑", "编辑", "编辑世界书", "编辑只能选一条消息", "编辑消息（角色会按新内容理解，也会知道你改过）", "编辑记忆", "编辑预设", "网址图片不会被压缩（它存在别人的服务器上，不占你的内存）。", "网易云音乐", "网易云音乐（一起听歌）还在开发中", "美化", "美化有改动还没保存", "美化预设（可存多套，一键切换）", "翻译中…", "翻译成", "聊天", "聊天记录", "聊天设置", "自动应急备份", "自动总结记忆", "自动翻译（不走你的 AI 请求）", "自动识别", "自定义美化 CSS", "至少勾一项", "菜单", "表情包", "表情包名称", "覆盖", "覆盖：先清空对应分区再导入（推荐，恢复备份用）", "角色人设", "角色偶尔会发语音气泡：说的话直接带在回复里（不额外请求），点 ▶ 用浏览器朗读（不是角色本人的声音）。线下模式不会发。", "角色可以发的表情包分类", "角色真名（写进提示词）", "角色称呼你为", "角色设定", "角色设定、头像、世界书挂载等", "角色设置", "计算中…", "让角色知道自己的心声", "记忆", "记忆太少，不需要精炼", "设置", "设置有改动还没保存", "试听", "语音", "语音自动转文字", "语音识别语言", "说点什么…", "说话时间太短", "请输入名称", "读取 txt / Word / json 文件", "转文字", "输入城市名，如 上海 / 成都 / Tokyo", "输出方式", "返回", "还没有世界书可导出", "还没有应急备份", "还没有角色，先去聊天里新建一个", "还没有记忆。点「总结」手动生成，或在角色设置里开启自动总结。", "还没有设置提示音", "还没有预设。把当前的方案、壁纸、字体、提示音、桌面图标和自定义 CSS 调好后，点下面按钮存起来，以后一键切换。", "还没有预设可导出", "还没选消息", "这个浏览器不支持定位", "这个浏览器不支持系统通知", "这个浏览器不能朗读", "这条语音没法转成可发送的音频，改发文字提示", "这次回复没带上心声（模型没按格式写）", "这次模型没有写出语音的文字，可以点气泡里的「转文字」", "这种消息不能编辑", "这里没法直接录音", "这里还没有表情包", "连里面的表情包一起删", "选择", "选择模型", "选择要导入的分区", "选择音频文件", "通知权限被拒绝了，请在浏览器的网站设置里允许", "配置预设（一键切换渠道）", "里面的表情包怎么处理？", "重命名", "重命名分类", "重新编辑", "重新计算", "重置排列", "重试", "雾蓝", "音频太大了（超过 4MB），请选短一点的", "音频网址 https://…（mp3 / wav / ogg）", "音频读取失败", "音频超过 3MB 了，提示音剪短一点，或者用网址", "预览", "预设", "预设内容", "预设名称", "预设（线下写作）", "默认方案", "默认（暖橙）", "（开始）", "（未使用预设）", "＋ 分类", "＋ 把当前美化存为新预设", "＋ 新建", "＋ 新建分类", "＋ 添加", "＋ 添加条目", "全部", "确定", "新建", "搜索", "今天", "昨天", "在线", "角色", "暂无", "散记", "翻译失败，点这里重试", "自动翻译", "图片", "系统录音机 / 音频文件", "一起听（网易云）", "确认", "继续", "夏青Phone", "已关闭", "已开启", "界面语言", "正在准备语言包…", "语言包准备好了", "切换语言", "简体中文", "撤回了一条消息", "拍了拍", "转账", "收款", "已收款", "线下模式", "线上", "常驻", "心声历史", "加载中…", "没有更多了", "消息", "联系人"];
+var I18N_KEYS = ["API 设置", "API 设置里有 Key，导出时默认不勾，需要的话自己勾上并保管好文件。", "API设置", "JSON 保留全部信息（含是否启用）；txt 和 Word 是可读格式，方便自己编辑后再导入。", "JSON 保留全部信息；txt 和 Word 用「# 预设名」分隔，方便自己编辑后再导入。", "一起听歌（关联桌面「网易云音乐」）还在开发中", "上下文", "上下文与记忆", "上传", "上传原图", "上传图片", "上传字体文件", "上传本地图片（可多选，自动压缩）", "上传音频", "下载应急备份文件", "不使用预设（只用内置写作要求）", "不保存", "不保存（还原）", "不分类", "不认识这个文件：不是 myphone-v1，也不是 EPhone 备份", "世界书", "世界书名称", "世界书扫描深度、记忆条数、气泡速度、通知等", "主 API（对话）", "主按钮", "主题、壁纸、字体、提示音、图标、CSS 及各种美化预设", "今天有点冷，你出门穿厚点。", "从应急备份恢复", "你在 TA 面前是谁", "你的人设", "保存", "保存为常驻", "保存为精炼记忆", "保存并离开", "允许角色发语音", "先不用", "先输入城市名", "全不选", "全选", "关键词", "关键词，用逗号分隔；留空 = 一直带入", "关键词，逗号分隔；留空 = 一直带入", "关闭", "其它设置", "内容", "删除", "删除分类", "删除条目", "删除此条目", "删除这个角色", "删除这个预设", "删除这本世界书", "副 API（总结、精炼记忆；留空则用主 API）", "加载更早的消息", "发现应急备份", "发语音给 AI 的方式", "发送", "取消", "取消引用", "另存为新预设", "只删分类（表情包移到「未分类」）", "只发文字 + 语气提示", "只针对这个角色。导出的文件可以导入到同一个角色，或换设备后导回来。", "合并", "合并：保留现有记录，只补上没有的（相同的消息不会重复）。覆盖：先清空这个角色现有的全部聊天记录再导入。", "合并：保留现有，同 ID 的被覆盖", "名称和网址都要填", "名称（也是让角色认识它的描述，如：委屈巴巴）", "含 API Key，请自己保管", "启用", "回复字数：最多", "回复字数：最少", "图片网址 https://…", "图片读取失败", "壁纸图片网址 https://…", "备份中…", "复制", "复制失败", "夏青phone", "夜间", "套用我的人设预设…", "好", "好～知道啦", "字体文件网址（.ttf / .otf / .woff2）", "字体文件超过 12MB，太大了，换个精简版或用网址", "字体（应用到所有页面）", "存为预设", "存为预设（保存当前这一项）", "完成", "完整备份", "完整导出（含图片和语音）", "定位失败：请允许定位权限，或直接输入城市", "对方说的语言", "导入", "导入中…", "导入中，请稍候…", "导入备份文件（自动识别格式）", "导入失败", "导入完成", "导入所选分区…", "导入方式", "导入聊天记录", "导入（json / txt / Word）", "导出", "导出全部（不含 API Key）", "导出全部（含 API Key）", "导出所选分区", "导出结果 JSON", "导出结果 TXT", "导出聊天记录", "已保存", "已删除", "已加入预设，记得点右上角「保存」", "已复制", "已应用", "已恢复", "已恢复默认排列", "已清空", "已移动", "已设置", "已转文字", "已选 0 条", "应急备份（防网页崩溃 / 数据被清）", "应用并保存", "应用网址", "应用这个预设（当前没存成预设的美化会被替换）", "开启", "开启后角色用小说式长文回复，不拆气泡、不发表情包", "开启线下模式", "开始导入", "开始精炼", "引用", "当前预设", "心声", "心声跟着 TA 的回复一起生成，不会多发一次请求；只是每次回复末尾多一小段", "心声（点聊天里角色的头像查看）", "总结", "恢复", "恢复默认", "批量导入表情包", "批量导入（粘贴 / txt / Word）", "把最新心声放进提示词，言行会更一致，但会多花一点 token", "抹茶", "拉取模型列表", "挂载世界书", "按分区导出 / 导入", "提示词占用（估算）", "搜索…", "搜索并使用", "搜索聊天记录", "搜索聊天记录…", "搜索，或直接输入模型名", "撤回", "播放失败", "播放失败：音频格式不支持或网址打不开", "播放语音", "支持本小手机导出的 myphone-v1 文件，也支持 EPhone 旧小手机的备份（会自动转换）。导入时可以勾选只导入哪些分区。", "改名（也是角色认识它的描述）", "放弃", "数据备份", "文件不是有效的 JSON", "文件不是有效的 JSON（或太大，手机内存不够）", "文件里没有可导入的内容", "新世界书", "新增记忆", "新建表情包分类", "新建角色", "新角色", "新预设", "显示名", "更多", "更换", "朗读语音", "未分类", "条目标题", "条目（可选）", "查看全部心声 ›", "标题", "桌面图标（自定义图片；回到桌面后生效）", "桌面壁纸（推荐用网址，不占本机空间；上传的是原图，不压缩）", "樱粉", "次按钮", "正在导出…", "正在总结…", "正在总结中，请稍等", "正在恢复…", "正在精炼…", "正在读取文件…", "正在转文字…", "每新增多少条消息总结一次", "每次回复都更新心声", "每次带最近多少条消息", "气泡字体大小", "气泡自定义 CSS（只对这个角色的聊天页生效）", "没找到应急备份", "没找到聊天记录（需要本软件导出的聊天记录文件）", "没找到这个城市", "没有匹配的", "没有可导出的消息", "没有应急备份", "没有通知权限，后台通知不会弹出", "没有需要总结的新消息", "没识别出文字", "没识别出文字。可以试试「用 API 转文字」", "没读到任何「名称 网址」", "浏览器自带", "消息提示音（角色每发一条消息响一声）", "添加", "添加表情包", "清空", "清除", "温度", "照片小组件", "用应急备份覆盖现在的全部数据？", "用当前内容覆盖它", "用当前定位", "用当前美化覆盖它", "用户人设", "用系统录音机录", "直接发音频（Gemini 等能听的模型）", "看手机", "看手机还在开发中", "看手机（关联桌面「看手机」）还在开发中", "移到其他分类", "移到哪个分类", "移除", "移除照片", "立即备份一次", "等回复", "管理", "管理预设", "精炼", "精炼失败", "精炼结果（可编辑）", "精炼记忆", "精简导出（不含图片和语音文件，更小）", "线下模式（小说式长文回复）", "线下预设", "统计中…", "继续编辑", "编辑", "编辑世界书", "编辑只能选一条消息", "编辑消息（角色会按新内容理解，也会知道你改过）", "编辑记忆", "编辑预设", "网址图片不会被压缩（它存在别人的服务器上，不占你的内存）。", "网易云音乐", "网易云音乐（一起听歌）还在开发中", "美化", "美化有改动还没保存", "美化预设（可存多套，一键切换）", "翻译中…", "翻译成", "聊天", "聊天记录", "聊天设置", "自动应急备份", "自动总结记忆", "自动翻译（不走你的 AI 请求）", "自动识别", "自定义美化 CSS", "至少勾一项", "菜单", "表情包", "表情包名称", "覆盖", "覆盖：先清空对应分区再导入（推荐，恢复备份用）", "角色人设", "角色偶尔会发语音气泡：说的话直接带在回复里（不额外请求），点语音气泡用「设置 → 语音合成（TTS）」里填的接口合成并播放，合成过的会缓存，重复点不再消耗额度。没配置 TTS 就不能播放。线下模式不会发。", "角色可以发的表情包分类", "角色真名（写进提示词）", "角色称呼你为", "角色设定", "角色设定、头像、世界书挂载等", "角色设置", "计算中…", "让角色知道自己的心声", "记忆", "记忆太少，不需要精炼", "设置", "设置有改动还没保存", "试听", "语音", "语音自动转文字", "语音识别语言", "说点什么…", "说话时间太短", "请输入名称", "读取 txt / Word / json 文件", "转文字", "输入城市名，如 上海 / 成都 / Tokyo", "输出方式", "返回", "还没有世界书可导出", "还没有应急备份", "还没有角色，先去聊天里新建一个", "还没有记忆。点「总结」手动生成，或在角色设置里开启自动总结。", "还没有设置提示音", "还没有预设。把当前的方案、壁纸、字体、提示音、桌面图标和自定义 CSS 调好后，点下面按钮存起来，以后一键切换。", "还没有预设可导出", "还没选消息", "这个浏览器不支持定位", "这个浏览器不支持系统通知", "这个浏览器不能朗读", "这条语音没法转成可发送的音频，改发文字提示", "这次回复没带上心声（模型没按格式写）", "这次模型没有写出语音的文字，可以点气泡里的「转文字」", "这种消息不能编辑", "这里没法直接录音", "这里还没有表情包", "连里面的表情包一起删", "选择", "选择模型", "选择要导入的分区", "选择音频文件", "通知权限被拒绝了，请在浏览器的网站设置里允许", "配置预设（一键切换渠道）", "里面的表情包怎么处理？", "重命名", "重命名分类", "重新编辑", "重新计算", "重置排列", "重试", "雾蓝", "音频太大了（超过 4MB），请选短一点的", "音频网址 https://…（mp3 / wav / ogg）", "音频读取失败", "音频超过 3MB 了，提示音剪短一点，或者用网址", "预览", "预设", "预设内容", "预设名称", "预设（线下写作）", "默认方案", "默认（暖橙）", "（开始）", "（未使用预设）", "＋ 分类", "＋ 把当前美化存为新预设", "＋ 新建", "＋ 新建分类", "＋ 添加", "＋ 添加条目", "全部", "确定", "新建", "搜索", "今天", "昨天", "在线", "角色", "暂无", "散记", "翻译失败，点这里重试", "自动翻译", "图片", "系统录音机 / 音频文件", "一起听（网易云）", "确认", "继续", "夏青Phone", "已关闭", "已开启", "界面语言", "正在准备语言包…", "语言包准备好了", "切换语言", "简体中文", "撤回了一条消息", "拍了拍", "转账", "收款", "已收款", "线下模式", "线上", "常驻", "心声历史", "加载中…", "没有更多了", "消息", "联系人"];
 /* ====================================================================
  * 系统多语言：界面文字（只翻译界面上固定的文字，不碰聊天内容、角色名、世界书等你自己写的内容）
  * 做法：切换语言时用免费翻译（不走你的 AI）把界面词表翻成目标语言，存在本机；之后离线也能用。切回中文随时可以。
@@ -597,7 +600,7 @@ var UI_LANGS = [['zh', '简体中文'], ['zh-TW', '繁體中文'], ['en', 'Engli
 var uiLang = 'zh', uiDict = null;
 try { uiLang = localStorage.getItem('mp-lang') || 'zh'; if (uiLang !== 'zh') uiDict = JSON.parse(localStorage.getItem('mp-i18n-' + uiLang) || 'null'); if (!uiDict) uiLang = 'zh'; } catch (e) { uiLang = 'zh'; uiDict = null; }
 function T(s) { return (uiDict && typeof s === 'string' && uiDict[s]) || s; }
-var T_SKIP = /\b(bubble|last|msg|quote|trans|cl-voice|cl-jot|stk-name|name-edit|mo-text|mo-name|mo-cm|mo-likes|mo-sign|mu-name|mu-sub|mu-lrc|lp-l)\b/;
+var T_SKIP = /\b(bubble|last|msg|quote|trans|cl-voice|cl-jot|vbar|pd-big|pd-sub|stk-name|name-edit|mo-text|mo-name|mo-cm|mo-likes|mo-sign|mu-name|mu-sub|mu-lrc|lp-l)\b/;
 function applyStaticI18n() {
   if (!uiDict) return;
   document.documentElement.lang = uiLang === 'zh-TW' ? 'zh-TW' : uiLang;
@@ -711,6 +714,7 @@ function clearTrans() {
 }
 function activate(id, isBack) {
   clearTrans();
+  closeCloud();   /* 换页（退出聊天回列表等）云朵自动收起 */
   if (id === 's-home' || id === 's-list') clearChatLook();
   var prev = document.querySelector('.screen.active'), next = $(id);
   if (prev === next) { if (onShow[id]) onShow[id](); return; }
@@ -839,6 +843,8 @@ var APPS = [
     tap: function () { go('s-music'); } },
   { name: '看手机', img:'https://i.imgs.ovh/2026/11/12/79c9fc0024948a5505778c43d91a6bfd.jpg', color: '#2f6f8f', icon: 'M8 3h8a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H8a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1zM11 18h2M9.5 11.5C10.5 9.8 11.3 9.3 12 9.3s1.5.5 2.5 2.2c-1 1.7-1.8 2.2-2.5 2.2s-1.5-.5-2.5-2.2z',
     tap: function () { toast('看手机还在开发中'); } },
+  { name: '经期', color: '#d9667c', icon: 'M12 3c3 4 6 7 6 11a6 6 0 0 1-12 0c0-4 3-7 6-11z',
+    tap: function () { go('s-period'); } },
   { name: '预设', color: '#7a6aa8', icon: 'M6 3h9l4 4v14H6zM14 3v5h5M9 12h7M9 16h7',   /* 想换图标图片：在这里加 img:'图片网址' */
     tap: function () { go('s-prlist'); } }
 ];
@@ -1504,7 +1510,7 @@ function addTrans(m, b, foot) {
 
 function msgNode(m) {
   if (m.hidden || m.type === 'system') return null;
-  if (m.type === 'pat') return h('div', { class: 'sysline', text: m.content });
+  if (m.type === 'pat') return h('div', { class: 'sysline', 'data-id': m.id, text: (m.meta && m.meta.show) || m.content });
   if (m.type === 'recalled') {
     var rl = h('div', { class: 'sysline recalled-line', text: (m.role === 'user' ? '你' : cur.name) + '撤回了一条消息' });
     var ot = m.meta && m.meta.orig && m.meta.orig.text;
@@ -1520,9 +1526,9 @@ function msgNode(m) {
     b.appendChild(img);
   } else if (t === 'voice' && !meta.audio && m.role === 'assistant') {
     b = h('div', { class: 'bubble vmsg' });
-    var tb = h('button', { type: 'button', class: 'vplay', text: '▶', 'aria-label': '朗读语音' });
-    tb.addEventListener('click', function (e) { e.stopPropagation(); speakVoice(tb, m.content); });
-    b.appendChild(h('div', { class: 'vrow' }, tb, h('span', { class: 'vbar' }), h('span', { class: 'vdur', text: fmtDur(meta.duration || estSpeakSecs(m.content)) })));
+    var tb = h('button', { type: 'button', class: 'vplay', text: '▶', 'aria-label': '播放语音' });
+    b.addEventListener('click', function (e) { if (e.target.closest('.vconv')) return; e.stopPropagation(); if (selMode || Date.now() - lastLP < 700) return; speakVoice(tb, m.content, b); });
+    b.appendChild(h('div', { class: 'vrow' }, tb, h('span', { class: 'vbar' }, h('i'), h('i'), h('i'), h('i'), h('i'), h('i'), h('i'), h('i'), h('i'), h('i')), h('span', { class: 'vdur', text: fmtDur(meta.duration || estSpeakSecs(m.content)) })));
     var tx = h('div', { class: 'vtext', text: m.content });
     if (cur && cur.autoVoiceText === false) { tx.hidden = true; b.appendChild(tx); b.appendChild(h('button', { type: 'button', class: 'vconv', text: '转文字', onclick: function (e) { e.stopPropagation(); tx.hidden = false; this.remove(); } })); }
     else b.appendChild(tx);
@@ -1530,7 +1536,7 @@ function msgNode(m) {
     b = h('div', { class: 'bubble vmsg' });
     var pb = h('button', { type: 'button', class: 'vplay', text: '▶', 'aria-label': '播放语音' });
     pb.addEventListener('click', function (e) { e.stopPropagation(); toggleVoice(pb, meta.audio); });
-    b.appendChild(h('div', { class: 'vrow' }, pb, h('span', { class: 'vbar' }), h('span', { class: 'vdur', text: fmtDur(meta.duration) })));
+    b.appendChild(h('div', { class: 'vrow' }, pb, h('span', { class: 'vbar' }, h('i'), h('i'), h('i'), h('i'), h('i'), h('i'), h('i'), h('i'), h('i'), h('i')), h('span', { class: 'vdur', text: fmtDur(meta.duration) })));
     if (m.content) b.appendChild(h('div', { class: 'vtext', text: m.content }));
     else b.appendChild(h('div', { class: 'vtext vpend', text: '（AI 回复时会写出文字）' }));
   } else if (t === 'image') {
@@ -1541,7 +1547,7 @@ function msgNode(m) {
     pic.addEventListener('click', function () { if (Date.now() - lastLP > 700 && !selMode) openLightbox(m.content); });
     b.appendChild(pic);
   } else if (t === 'transfer') {
-    b = h('div', { class: 'bubble transfer' }, h('b', { text: '¥ ' + (meta.amount != null ? meta.amount : '') }), meta.note || '转账');
+    b = h('div', { class: 'bubble transfer' + (meta.status && meta.status !== 'pending' ? ' done' : ''), onclick: function () { onTransferTap(m); } }, h('b', { text: '¥ ' + (meta.amount != null ? Number(meta.amount).toFixed(2) : '') }), h('span', { text: meta.note || '转账' }), h('small', { text: transferLabel(m) }));
   } else {
     b = h('div', { class: 'bubble' + (t === 'voice' ? ' voice' : '') + (t === 'offline' ? ' offline' : '') });
     if (meta.quote && typeof meta.quote === 'object' && (meta.quote.content || meta.quote.text))
@@ -1737,13 +1743,14 @@ function compressImage(file, o) {
     var u = URL.createObjectURL(file), img = new Image();
     img.onload = function () {
       URL.revokeObjectURL(u);
-      var k = Math.min(1, (o.maxDim || 512) / Math.max(img.width, img.height)), w = Math.max(1, Math.round(img.width * k)), hh = Math.max(1, Math.round(img.height * k));
+      var k = o.maxWidth ? Math.min(1, o.maxWidth / img.width) : Math.min(1, (o.maxDim || 512) / Math.max(img.width, img.height)), w = Math.max(1, Math.round(img.width * k)), hh = Math.max(1, Math.round(img.height * k));
       var cv = document.createElement('canvas'); cv.width = w; cv.height = hh;
       var g = cv.getContext('2d');
       if (!o.alpha) { g.fillStyle = '#fff'; g.fillRect(0, 0, w, hh); }
       g.drawImage(img, 0, 0, w, hh);
       var out;
       if (o.alpha) { out = cv.toDataURL('image/webp', o.quality || 0.8); if (out.indexOf('data:image/webp') !== 0) out = cv.toDataURL('image/png'); }
+      else if (o.webp) { out = cv.toDataURL('image/webp', o.quality || 0.85); if (out.indexOf('data:image/webp') !== 0) out = cv.toDataURL('image/jpeg', o.quality || 0.85); }
       else out = cv.toDataURL('image/jpeg', o.quality || 0.8);
       res({ url: out, w: w, h: hh });
     };
@@ -1755,6 +1762,7 @@ function openLightbox(src) {
   var o = h('div', { class: 'lightbox', onclick: function () { o.remove(); } }, h('img', { src: src, alt: '' }));
   document.body.appendChild(o);
 }
+var IMG_SEND_MAX_W = 1024;   /* 发给 AI 的图片：只限制宽度（≤1024 不缩小），高度等比，优先 webp、质量 0.85，长截图文字才看得清 */
 var IMG_SEND_MAX = 512;   /* 发给 AI 的图片：长边最多多少像素（越小越省 token）；质量 0.8 */
 function openImagePicker() {
   if (!cur) return;
@@ -1764,7 +1772,7 @@ function openImagePicker() {
     var ok = 0, bad = 0, before = 0, after = 0;
     for (var i = 0; i < files.length; i++) {
       try {
-        var r = await compressImage(files[i], { maxDim: IMG_SEND_MAX, quality: 0.8 });
+        var r = await compressImage(files[i], { maxWidth: IMG_SEND_MAX_W, webp: true, quality: 0.85 });
         var m = { id: uid(cur.id), characterId: cur.id, role: 'user', type: 'image', content: r.url, ts: Date.now() + i, meta: { w: r.w, h: r.h } };
         await dbPut('messages', m);
         if (lastShownTs && m.ts - lastShownTs > 600000) appendMsgNode(h('div', { class: 'sysline', text: fmtTime(m.ts).replace(/:\d\d$/, '') }));
@@ -1982,12 +1990,129 @@ async function openVoiceRecorder() {
   };
 }
 /* 底栏「＋」：向上展开一列悬浮圆（语音 / 音频文件 / 图片 / 一起听 / 看手机），做法和右上角 ⋯ 一样 */
+/* ---------- 拍一拍 / 转账（双向）+ 经期 ---------- */
+var ACT_RULES = '想拍一拍用户时，另起一行只写 [拍一拍]；想给用户转账，另起一行写 [转账:金额:备注]（金额是数字，备注可省略）；用户转给你的钱（聊天里显示为「[转账 …]」且还没处理），你决定收下就另起一行写 [收款]，不想收就写 [退还]。这些标记不是聊天内容，不要解释它们，也不必每次都用，只在合适、符合角色时才用。';
+/* 从回复里拆出动作标记，返回 { reply, acts:[{k:'pat'|'transfer'|'accept'|'refund', amount, note}] } */
+function extractActions(text) {
+  var t = String(text || ''), acts = [];
+  t = t.replace(/\[拍一拍\]/g, function () { acts.push({ k: 'pat' }); return ''; });
+  t = t.replace(/\[转账[:：]\s*([\d.]+)\s*(?:[:：]([^\]]*))?\]/g, function (a, amt, note) { var n = Math.round(parseFloat(amt) * 100) / 100; if (n > 0) acts.push({ k: 'transfer', amount: n, note: (note || '').trim() }); return ''; });
+  t = t.replace(/\[(收款|退还)\]/g, function (a, w) { acts.push({ k: w === '收款' ? 'accept' : 'refund' }); return ''; });
+  return { reply: t.replace(/\n{3,}/g, '\n\n').trim(), acts: acts };
+}
+function addLocalMsg(m) {
+  return dbPut('messages', m).then(function () {
+    if (cur && cur.id === m.characterId) { var n = msgNode(m); if (n) { $('msgs').appendChild(n); lastShownTs = m.ts; scrollBottom(); } }
+  });
+}
+function userPat() {
+  if (!cur) return;
+  addLocalMsg({ id: uid(cur.id), characterId: cur.id, role: 'user', type: 'pat', content: '你拍了拍 ' + cur.name, ts: Date.now() }).then(function () { if (settings.autoReply) generateReply(); });
+}
+function transferSheet() {
+  var amt = h('input', { type: 'number', inputmode: 'decimal', step: '0.01', min: '0', placeholder: '金额（元）', style: 'width:100%;box-sizing:border-box;padding:10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:inherit;margin-bottom:8px;font-size:18px' });
+  var note = h('input', { type: 'text', placeholder: '备注（可不填）', style: 'width:100%;box-sizing:border-box;padding:10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:inherit' });
+  openSheet([h('h3', { text: '转账给 ' + cur.name }), amt, note, h('div', { class: 'btn-row' },
+    h('button', { class: 'btn primary', text: '转账', onclick: function () {
+      var n = Math.round(parseFloat(amt.value) * 100) / 100; if (!(n > 0)) { toast('请输入大于 0 的金额'); return; }
+      closeSheet();
+      addLocalMsg({ id: uid(cur.id), characterId: cur.id, role: 'user', type: 'transfer', content: '', meta: { amount: n, note: note.value.trim(), receiverName: cur.name, status: 'pending' }, ts: Date.now() }).then(function () { if (settings.autoReply) generateReply(); });
+    } }),
+    h('button', { class: 'btn', text: '取消', onclick: closeSheet }))]);
+  setTimeout(function () { amt.focus(); }, 50);
+}
+function transferLabel(m) {
+  var s = (m.meta && m.meta.status) || 'pending';
+  if (s === 'accepted') return m.role === 'user' ? '对方已收款' : '已收款';
+  if (s === 'refunded') return m.role === 'user' ? '对方已退还' : '已退还';
+  return m.role === 'user' ? '等待对方收款' : '点击收款 / 退还';
+}
+function redrawMsg(m) {
+  var old = $('msgs').querySelector('.row[data-id="' + m.id + '"]'); if (!old) return;
+  var n = msgNode(m); if (n) old.replaceWith(n);
+}
+async function setTransferStatus(m, st, byUser) {
+  m.meta = m.meta || {}; m.meta.status = st; await dbPut('messages', m); redrawMsg(m);
+  if (byUser) await addLocalMsg({ id: uid(m.characterId), characterId: m.characterId, role: 'user', type: 'pat', content: '[系统提示：用户' + (st === 'accepted' ? '收下' : '退还') + '了你转的 ¥' + m.meta.amount + ']', ts: Date.now() + 1, meta: { show: (st === 'accepted' ? '你收下了' : '你退还了') + cur.name + '的转账 ¥' + m.meta.amount } });
+}
+function onTransferTap(m) {
+  if (selMode || Date.now() - lastLP < 700) return;
+  if (m.role === 'assistant' && ((m.meta && m.meta.status) || 'pending') === 'pending')
+    menuSheet('¥ ' + m.meta.amount + ' · ' + cur.name + ' 的转账', [['收款', function () { setTransferStatus(m, 'accepted', true); }], ['退还', function () { setTransferStatus(m, 'refunded', true); }]]);
+}
+/* AI 的动作落库：拍一拍 / 转账 → 新消息；收款 / 退还 → 改最近一笔待处理的用户转账 */
+async function applyActs(char, acts, base) {
+  var out = [];
+  for (var i = 0; i < acts.length; i++) {
+    var a = acts[i];
+    if (a.k === 'pat') out.push({ type: 'pat', content: char.name + ' 拍了拍你' });
+    else if (a.k === 'transfer') out.push({ type: 'transfer', content: '', meta: { amount: a.amount, note: a.note, receiverName: '我', status: 'pending' } });
+    else {
+      var tail = await pageMessages(char.id, null, 60), t = tail.filter(function (x) { return x.role === 'user' && x.type === 'transfer' && ((x.meta && x.meta.status) || 'pending') === 'pending'; }).pop();
+      if (t) { t.meta.status = a.k === 'accept' ? 'accepted' : 'refunded'; await dbPut('messages', t); redrawMsg(t); out.push({ type: 'pat', content: char.name + (a.k === 'accept' ? ' 收下了你的转账 ¥' : ' 退还了你的转账 ¥') + t.meta.amount }); }
+    }
+  }
+  return out;
+}
+/* 经期：数据在 settings.period，只存本机 */
+function periodData() { var p = settings.period || {}; return { cycle: p.cycle || 28, len: p.len || 5, starts: (p.starts || []).slice().sort(function (a, b) { return a - b; }) }; }
+function dayNum(ts) { var d = new Date(ts); return Math.floor(new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime() / 86400000 + 0.5); }
+function periodState() {
+  var p = periodData(); if (!p.starts.length) return null;
+  var last = p.starts[p.starts.length - 1], today = dayNum(Date.now()), n = today - dayNum(last) + 1;
+  var next = dayNum(last) + p.cycle, to = next - today;
+  var phase = n <= p.len ? '经期第 ' + n + ' 天' : to > 0 ? (to <= 3 ? '快到经期了' : n <= p.cycle / 2 - 2 ? '经期后的卵泡期' : n <= p.cycle / 2 + 2 ? '排卵期前后' : '经前黄体期') : '已晚于预计 ' + (-to) + ' 天';
+  return { n: n, to: to, phase: phase, nextDate: new Date(next * 86400000 + new Date().getTimezoneOffset() * 60000) };
+}
+function periodPromptText() {
+  var s = periodState(); if (!s) return '';
+  return '# 用户的经期（只用来更体贴地关心，不要刻意、频繁地提起）\n现在：' + s.phase + (s.to > 0 ? '，预计 ' + s.to + ' 天后来' : '') + '。';
+}
+async function savePeriod(p) { settings.period = p; await saveSettings(); }
+onShow['s-period'] = function () {
+  var body = $('period-body'); body.innerHTML = '';
+  var p = periodData(), s = periodState();
+  body.appendChild(h('div', { class: 'glass pd-card' },
+    h('div', { class: 'pd-big', text: s ? s.phase : '还没有记录' }),
+    h('div', { class: 'pd-sub', text: s ? (s.to > 0 ? '距离下次预计还有 ' + s.to + ' 天（' + (s.nextDate.getMonth() + 1) + ' 月 ' + s.nextDate.getDate() + ' 日）' : '已晚于预计日期，来了就点下面的按钮记录') : '来了就点下面的按钮，记一次开始日' })));
+  body.appendChild(h('div', { class: 'btn-row' },
+    h('button', { class: 'btn primary', text: '今天来了', onclick: async function () {
+      var q = periodData(), t = dayNum(Date.now());
+      if (q.starts.some(function (x) { return Math.abs(dayNum(x) - t) < 3; })) { toast('最近已经记过了'); return; }
+      q.starts.push(Date.now()); await savePeriod(q); onShow['s-period']();
+    } }),
+    h('button', { class: 'btn', text: '撤销最近一次', onclick: function () {
+      var q = periodData(); if (!q.starts.length) return;
+      confirmSheet('撤销最近一次记录？', '撤销', async function () { q.starts.pop(); await savePeriod(q); onShow['s-period'](); }, true);
+    } })));
+  var cy = h('input', { type: 'number', min: '20', max: '45', value: String(p.cycle) }), ln = h('input', { type: 'number', min: '2', max: '10', value: String(p.len) });
+  function sv() { var q = periodData(); q.cycle = Math.max(20, Math.min(45, parseInt(cy.value, 10) || 28)); q.len = Math.max(2, Math.min(10, parseInt(ln.value, 10) || 5)); savePeriod(q); }
+  cy.onchange = ln.onchange = function () { sv(); onShow['s-period'](); };
+  body.appendChild(h('div', { class: 'group-title', text: '周期设置' }));
+  body.appendChild(h('div', { class: 'group' },
+    h('div', { class: 'field inline' }, h('label', { text: '周期长度（天）' }), cy),
+    h('div', { class: 'field inline' }, h('label', { text: '经期天数' }), ln)));
+  if (p.starts.length) {
+    body.appendChild(h('div', { class: 'group-title', text: '记录（点一条可删除）' }));
+    var g = h('div', { class: 'group' });
+    p.starts.slice().reverse().slice(0, 12).forEach(function (t) {
+      var d = new Date(t);
+      g.appendChild(h('div', { class: 'item', onclick: function () { confirmSheet('删除这条记录？', '删除', async function () { var q = periodData(); q.starts = q.starts.filter(function (x) { return x !== t; }); await savePeriod(q); onShow['s-period'](); }, true); } },
+        h('div', { class: 't' }, h('b', { text: d.getFullYear() + ' 年 ' + (d.getMonth() + 1) + ' 月 ' + d.getDate() + ' 日 开始' }))));
+    });
+    body.appendChild(g);
+  }
+  body.appendChild(h('div', { class: 'hint', style: 'padding:0 20px;color:var(--sub);font-size:12px;line-height:1.6', text: '数据只存在这台设备里。想让某个角色知道并体贴你：角色设置 → 经期 → 打开。只是提示词里多一句话，不会多发请求。' }));
+};
+
 var PLUS_ITEMS = [
   ['重说', 'M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7', function () { confirmSheet('让 ' + cur.name + ' 重新回复上一轮？\n（会删掉 TA 最近这一轮的回复，重新生成）', '重说', regenerate); }],
   ['语音', 'M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3zM6 11a6 6 0 0 0 12 0M12 17v4', function () { openVoiceRecorder(); }],
   ['系统录音机 / 音频文件', 'M3 12h2l2-6 3 12 3-9 2 3h6', function () { voiceFromFile(true); }],
   ['图片', 'M4 5h16v14H4zM4 16l5-5 4 4 3-3 4 4M9 9.5h.01', function () { openImagePicker(); }],
   ['一起听（网易云）', 'M9 18V5l11-2v13M9 18a3 3 0 1 1-3-3 3 3 0 0 1 3 3zM20 16a3 3 0 1 1-3-3 3 3 0 0 1 3 3z', function () { muTogetherToggle(); }],
+  ['转账', 'M7 8h12l-3-3M17 16H5l3 3M12 10v4M10.5 11.5h3', function () { transferSheet(); }],
+  ['拍一拍', 'M9 11V5.5a1.5 1.5 0 0 1 3 0V10M12 10V4.5a1.5 1.5 0 0 1 3 0V10M15 10V6.5a1.5 1.5 0 0 1 3 0V14a6 6 0 0 1-6 6h-1a6 6 0 0 1-5-2.7L4 13.5a1.5 1.5 0 0 1 2.5-1.6L9 14.5', function () { userPat(); }],
   ['看手机', 'M8 3h8a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H8a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1zM11 18h2', function () { toast('看手机（关联桌面「看手机」）还在开发中'); }]
 ];
 function closePlus() { $('plusmenu').hidden = true; $('b-plus').classList.remove('on'); }
@@ -2006,16 +2131,81 @@ $('b-plus').onclick = function () {
 };
 $('plusmenu').addEventListener('click', function (e) { if (e.target === this) closePlus(); });
 
-/* AI 的语音：用浏览器自带的朗读（免费、不请求）。声音是系统的，不是角色本人的声音 */
-function speakLang(t) { return /[぀-ヿ]/.test(t) ? 'ja-JP' : /[가-힯]/.test(t) ? 'ko-KR' : /[一-鿿]/.test(t) ? 'zh-CN' : 'en-US'; }
-var spBtn = null;
-function speakVoice(btn, text) {
-  if (!window.speechSynthesis) { toast('这个浏览器不能朗读'); return; }
-  var was = spBtn === btn; speechSynthesis.cancel(); if (spBtn) spBtn.textContent = '▶'; spBtn = null;
-  if (was) return;
-  var u = new SpeechSynthesisUtterance(text); u.lang = speakLang(text); spBtn = btn; btn.textContent = '⏸';
-  u.onend = u.onerror = function () { btn.textContent = '▶'; if (spBtn === btn) spBtn = null; };
-  speechSynthesis.speak(u);
+/* ---------- 外部 TTS（OpenAI 兼容 /v1/audio/speech）：配置只读 localStorage，代码里不写任何默认地址或密钥 ---------- */
+function ttsCfg() {
+  var o = {}; try { o = JSON.parse(localStorage.getItem('mp_tts') || '{}') || {}; } catch (e) {}
+  return { url: String(o.url || '').trim(), key: String(o.key || '').trim(), voice: String(o.voice || '').trim(), model: String(o.model || '').trim() || 'tts-1' };
+}
+function ttsSave(o) { try { localStorage.setItem('mp_tts', JSON.stringify(o)); } catch (e) { toast('保存失败：浏览器不让写本地存储'); } }
+function ttsEndpoint(u) {
+  var b = String(u || '').trim().replace(/\/+$/, '');
+  if (!b) return '';
+  if (/\/v1\/audio\/speech$/.test(b)) return b;
+  b = b.replace(/\/audio\/speech$/, '').replace(/\/v1$/, '');
+  return b + '/v1/audio/speech';
+}
+var ttsMem = {}, ttsAudio = null, ttsBtn = null, ttsBub = null, ttsBusy = {};
+function ttsKey(text, c) { var s = c.model + '|' + c.voice + '|' + text, x = 5381; for (var i = 0; i < s.length; i++) x = ((x * 33) ^ s.charCodeAt(i)) >>> 0; return 'https://tts.cache.local/' + x.toString(36) + '-' + s.length; }
+async function ttsBlob(text, c) {
+  var k = ttsKey(text, c);
+  if (ttsMem[k]) return ttsMem[k];
+  var cache = null; try { cache = window.caches ? await caches.open('mp-tts-v1') : null; } catch (e) {}
+  if (cache) { try { var hit = await cache.match(k); if (hit) { var hb = await hit.blob(); ttsMem[k] = hb; return hb; } } catch (e) {} }
+  var res = await fetch(ttsEndpoint(c.url), { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + c.key }, body: JSON.stringify({ model: c.model, input: text, voice: c.voice }) });
+  if (!res.ok) { var raw = ''; try { raw = await res.text(); } catch (e) {} var er = new Error('语音合成失败 ' + res.status + (raw ? '：' + raw.slice(0, 200) : '')); throw er; }
+  var blob = await res.blob();
+  if (!blob.size || /json|text/.test(blob.type || '')) { throw new Error('接口没有返回音频' + (blob.size ? '：' + (await blob.text()).slice(0, 200) : '')); }
+  ttsMem[k] = blob;
+  if (cache) { try { await cache.put(k, new Response(blob, { headers: { 'Content-Type': blob.type || 'audio/mpeg' } })); } catch (e) {} }
+  return blob;
+}
+function ttsStop() {
+  if (ttsAudio) { try { ttsAudio.pause(); } catch (e) {} }
+  if (ttsBtn) ttsBtn.textContent = '▶';
+  if (ttsBub) ttsBub.classList.remove('playing', 'loading');
+}
+/* 点气泡：没在放 → 合成（有缓存就不再请求）并播放；在放 → 暂停；暂停中 → 继续 */
+async function speakVoice(btn, text, bub) {
+  if (ttsAudio && ttsBtn === btn && ttsAudio.src) {
+    if (!ttsAudio.paused) { ttsAudio.pause(); btn.textContent = '▶'; if (bub) bub.classList.remove('playing'); return; }
+    if (!ttsAudio.ended) { ttsAudio.play(); btn.textContent = '⏸'; if (bub) bub.classList.add('playing'); return; }
+  }
+  var c = ttsCfg();
+  if (!c.url || !c.key || !c.voice) { iosAlert('还没配置语音', '请到「设置 → 语音合成（TTS）」填好接口地址、密钥和音色 ID 并保存。'); return; }
+  if (ttsBusy[btn.dataset.k || '']) return;
+  ttsStop();
+  var kk = ttsKey(text, c); btn.dataset.k = kk; ttsBusy[kk] = true;
+  btn.textContent = '…'; if (bub) bub.classList.add('loading');
+  try {
+    var blob = await ttsBlob(text, c);
+    var a = new Audio(URL.createObjectURL(blob));
+    ttsAudio = a; ttsBtn = btn; ttsBub = bub || null;
+    a.onended = a.onerror = function () { btn.textContent = '▶'; if (bub) bub.classList.remove('playing', 'loading'); };
+    await a.play();
+    btn.textContent = '⏸'; if (bub) { bub.classList.remove('loading'); bub.classList.add('playing'); }
+  } catch (e) {
+    btn.textContent = '▶'; if (bub) bub.classList.remove('playing', 'loading');
+    iosAlert('语音合成失败', e.message || String(e));
+  } finally { delete ttsBusy[kk]; }
+}
+/* 去掉模型的思考过程：<think>/<thinking>/<thought> 标签，以及「🫧thought / 🫧thinking」标记及其内容 */
+function stripThinking(text) {
+  var t = String(text || '');
+  t = t.replace(/<(think|thinking|thought|thoughts)>[\s\S]*?<\/\1>/gi, '');
+  t = t.replace(/<(think|thinking|thought|thoughts)>[\s\S]*$/i, '');
+  t = t.replace(/^[\s\S]*?<\/(think|thinking|thought|thoughts)>/i, '');
+  var W = '(?:thoughts?|thinking|think|reasoning)', open = new RegExp('🫧\\s*' + W + '\\b[ \\t]*[:：]?[ \\t]*', 'i'), close = new RegExp('🫧\\s*/\\s*' + W + '\\s*[:：]?|🫧(?!\\s*' + W + ')', 'i'), guard = 0;
+  while (guard++ < 30) {
+    var m = open.exec(t); if (!m) break;
+    var rest = t.slice(m.index + m[0].length), end, nl = rest.indexOf('\n'), cl = close.exec(rest);
+    if (cl && (nl === -1 || cl.index <= nl || /^\s*\n/.test(rest))) end = cl.index + cl[0].length;   /* 有闭合标记 */
+    else if (nl === -1) end = rest.length;                                                               /* 最后一行 */
+    else if (/^\s*$/.test(rest.slice(0, nl))) { var bl = /\n[ \t]*\n/.exec(rest.slice(nl)); end = bl ? nl + bl.index + bl[0].length : rest.length; }   /* 标记单独一行：思考在下面，删到空行 */
+    else end = nl + 1;                                                                                    /* 标记后面同一行有内容：只删这一行 */
+    t = t.slice(0, m.index) + rest.slice(end);
+  }
+  t = t.replace(/🫧\s*\/\s*(?:thoughts?|thinking|think|reasoning)\s*[:：]?/gi, '');
+  return t.replace(/^\s+/, '');
 }
 /* 本机转文字（不走你的 API）：新版 Chrome 能直接把录音喂给识别器；旧的就「外放 + 麦克风听」 */
 /* 用 API 转文字（会请求 1 次）：Gemini 官方地址 → 用主模型听；其它 → 走反代的 /v1/audio/transcriptions（OpenAI 格式的 whisper 接口） */
@@ -2278,7 +2468,15 @@ async function buildPrompt(char) {
   var muCtx = await muPromptCtx(char);   /* 一起听：只有绑定了这个角色才有 */
   var pool = stickerPool(await dbAll('stickers'), char.stickerCategoryIds);
   var shown = sampleStickers(pool, settings.stickerPromptLimit);
-  var system = buildSystem({ gap: gap, char: char, settings: settings, entries: entries, memories: mems, stickers: shown, thought: thought, preset: preset, wantThought: wantThought, momentsText: moCtx ? moCtx.text : '', musicText: muCtx ? muPromptText(muCtx) : '', voice: audioUsed ? 'audio' : hasVoice, dictate: dictIds.length, changes: changes, now: Date.now() });
+  var system = buildSystem({ gap: gap, char: char, settings: settings, entries: entries, wbLate: true, memories: mems, stickers: shown, thought: thought, preset: preset, wantThought: wantThought, momentsText: moCtx ? moCtx.text : '', periodText: char.periodOn ? periodPromptText() : '', musicText: muCtx ? muPromptText(muCtx) : '', voice: audioUsed ? 'audio' : hasVoice, dictate: dictIds.length, changes: changes, now: Date.now() });
+  /* 世界书挪到最新一条用户消息之前（近因效应）：系统提示词/设定/记忆仍在最顶部 */
+  if (entries.length) {
+    var wbText = '[世界书（当前相关的设定，请优先遵守，不要被上面的历史记忆覆盖）]\n' + entries.map(function (e) { return '【' + (e.title || e.book) + '】\n' + e.content; }).join('\n\n') + '\n[世界书结束]';
+    var li = -1; for (var q = apiMsgs.length - 1; q >= 0; q--) { if (apiMsgs[q].role === 'user') { li = q; break; } }
+    if (li === -1) apiMsgs.push({ role: 'user', content: wbText });
+    else if (typeof apiMsgs[li].content === 'string') apiMsgs[li].content = wbText + '\n\n' + apiMsgs[li].content;
+    else apiMsgs[li].content.unshift({ type: 'text', text: wbText });
+  }
   return { system: system, messages: apiMsgs, pool: pool, wantThought: wantThought, momentIds: moCtx ? moCtx.ids : null, musicOn: !!muCtx, dictIds: dictIds, stats: { history: history.length, entries: entries.length, memories: mems.length, stickers: shown.length } };
 }
 
@@ -2319,12 +2517,15 @@ async function generateReply(fresh) {
     if (!r.active || r.won) return;
     var dict = extractDictation(text);   /* 用户语音的文字也随回复一起回来，不另外请求 */
     var mc = extractMusicCmd(dict.reply);   /* [CMD:…] 先抽掉，不显示 */
-    var mo = extractMoments(mc.reply);   /* 朋友圈互动也随回复一起回来 */
+    var ac = extractActions(mc.reply);   /* [拍一拍] [转账] [收款] 也随回复回来 */
+    var mo = extractMoments(ac.reply);   /* 朋友圈互动也随回复一起回来 */
     var st = extractStatus(mo.reply);
     var ex = extractThought(st.reply), replyText = ex.reply;   /* 心声同理 */
-    var items = char.offlineMode ? (replyText.trim() ? [{ type: 'offline', content: replyText.trim() }] : []) : parseReplyLines(splitReply(replyText, 12), prompt.pool, !!char.aiVoice), base = Date.now(), saved = [];
-    if (!items.length) throw new Error('模型的回复里没有可显示的内容（只有找不到的表情包）。原始回复：' + text.slice(0, 200));
+    var items = char.offlineMode ? (replyText.trim() ? [{ type: 'offline', content: replyText.trim() }] : []) : parseReplyLines(splitReply(replyText, 50), prompt.pool, !!char.aiVoice), base = Date.now(), saved = [];
+    if (!items.length && !ac.acts.length) throw new Error('模型的回复里没有可显示的内容（只有找不到的表情包）。原始回复：' + text.slice(0, 200));
     r.won = true;
+    var actItems = ac.acts.length ? await applyActs(char, ac.acts) : [];
+    actItems.forEach(function (a) { items.push(a); });
     if (st.status) {
       char.status = st.status;
       await dbPut('characters', char);
@@ -2657,12 +2858,21 @@ function placeCloud() {
   cloudEl.classList.toggle('up', up); cloudEl.style.left = left + 'px'; cloudEl.style.top = top + 'px';
   cloudEl.style.setProperty('--tail', Math.max(14, Math.min(cw - 30, r.left + r.width / 2 - left - 6)) + 'px');
 }
+['pointerdown', 'touchstart', 'mousedown'].forEach(function (ev) {   /* 点云朵以外任何地方都关（包括点消息气泡） */
+  document.addEventListener(ev, function (e) {
+    if (!cloudEl) return; var t = e.target;
+    if (t && t.closest && t.closest('.cloud')) return;
+    if (cloudAnchor && cloudAnchor.contains && cloudAnchor.contains(t)) return;
+    closeCloud();
+  }, true);
+});
 function showThoughtCloud(anchor) {
   if (cloudEl) { closeCloud(); return; }
   var shade = h('div', { class: 'cloud-shade' }), c = h('div', { class: 'cloud', style: 'visibility:hidden' }, h('i', { class: 't1' }), h('i', { class: 't2' }), h('div', { class: 'cloud-body' }),
     h('button', { type: 'button', class: 'cl-more', text: '查看全部心声 ›', onclick: function (e) { e.stopPropagation(); closeCloud(); openThoughts(cur); } }));
   shade.appendChild(c); document.body.appendChild(shade); cloudEl = shade; cloudAnchor = anchor;
-  shade.addEventListener('click', function (e) { if (e.target === shade) closeCloud(); });
+  shade.addEventListener('pointerdown', function (e) { if (!e.target.closest('.cloud')) { e.preventDefault(); closeCloud(); } });
+  shade.addEventListener('click', function (e) { if (!e.target.closest('.cloud')) closeCloud(); });
   fillCloud();
 }
 /* 新心声写进数据库后调用：云朵开着就换成最新的 */
@@ -2839,7 +3049,7 @@ onShow['s-char'] = async function () {
     h('div', { class: 'field inline' }, h('label', { text: '自动总结记忆' }), auto.el), field('每新增多少条消息总结一次', f.interval)));
   body.appendChild(h('div', { class: 'group-title', text: '语音' }));
   body.appendChild(h('div', { class: 'group' }, h('div', { class: 'field inline' }, h('div', {}, h('label', { text: '语音自动转文字' }), h('div', { class: 'hint', text: '你发语音时，用浏览器自带的识别实时转成文字（不走 API）；角色的语音气泡也据此直接显示文字。关闭后都先不显示，点气泡里的「转文字」再显示。AI 听你的语音不受这个开关影响。' })), avOn.el)));
-  body.appendChild(h('div', { class: 'group' }, h('div', { class: 'field inline' }, h('div', {}, h('label', { text: '允许角色发语音' }), h('div', { class: 'hint', text: '角色偶尔会发语音气泡：说的话直接带在回复里（不额外请求），点 ▶ 用浏览器朗读（不是角色本人的声音）。线下模式不会发。' })), aiVoiceOn.el)));
+  body.appendChild(h('div', { class: 'group' }, h('div', { class: 'field inline' }, h('div', {}, h('label', { text: '允许角色发语音' }), h('div', { class: 'hint', text: '角色偶尔会发语音气泡：说的话直接带在回复里（不额外请求），点语音气泡用「设置 → 语音合成（TTS）」里填的接口合成并播放，合成过的会缓存，重复点不再消耗额度。没配置 TTS 就不能播放。线下模式不会发。' })), aiVoiceOn.el)));
   body.appendChild(h('div', { class: 'group-title', text: '线下模式（小说式长文回复）' }));
   body.appendChild(h('div', { class: 'group' }, h('div', { class: 'field inline' }, h('div', {}, h('label', { text: '开启线下模式' }), h('div', { class: 'hint', text: '开启后角色用小说式长文回复，不拆气泡、不发表情包' })), offOn.el), offBox));
   var pinOn = switchEl(!!c.pinned, function () {});
@@ -2859,6 +3069,10 @@ onShow['s-char'] = async function () {
   body.appendChild(h('div', { class: 'group-title', text: '朋友圈' }));
   body.appendChild(h('div', { class: 'group' },
     h('div', { class: 'field inline' }, h('div', {}, h('label', { text: '让 TA 参与朋友圈' }), h('div', { class: 'hint', text: '开启后，TA 每次回复你时会顺带看一眼朋友圈，可能发动态、点赞、评论你的动态；全部并进同一次请求，不会多发请求，只是提示词多一小段（最近 6 条动态）' })), moOn.el)));
+  var peOn = switchEl(c.periodOn === true);
+  body.appendChild(h('div', { class: 'group-title', text: '经期' }));
+  body.appendChild(h('div', { class: 'group' },
+    h('div', { class: 'field inline' }, h('div', {}, h('label', { text: '让 TA 知道我的经期' }), h('div', { class: 'hint', text: '打开后提示词里多一句你现在处于哪个阶段（来自桌面「经期」的记录），TA 会更体贴；不多发请求' })), peOn.el)));
   body.appendChild(h('div', { class: 'group-title', text: '挂载世界书' }));
   var wbPick = multiPick('选择要挂载的世界书', books.map(function (b) { return { id: b.id, name: b.name, sub: (b.entries || []).length + ' 条' }; }), c.worldBookIds || [], '还没有世界书');
   body.appendChild(h('div', { class: 'group' }, wbPick.el));
@@ -2902,7 +3116,7 @@ onShow['s-char'] = async function () {
     var on = stPick.get();
     c.stickerCategoryIds = (!stOpts.length || on.length === stOpts.length) ? null : on;
     c.avatar = av.avatar; c.userAvatar = av.userAvatar;
-    c.autoThought = { enabled: thAuto.input.checked }; c.momentsOn = moOn.input.checked;
+    c.autoThought = { enabled: thAuto.input.checked }; c.momentsOn = moOn.input.checked; c.periodOn = peOn.input.checked;
     c.pinned = pinOn.input.checked; c.timeAware = taOn.input.checked; c.timeZone = tzSel.value || '';
     c.autoVoiceText = avOn.input.checked; c.aiVoice = aiVoiceOn.input.checked;
     c.offlineMode = offOn.input.checked;
@@ -2932,6 +3146,18 @@ $('b-char-save').onclick = async function () {
  * vars 里的名字 = 页面 CSS 变量（bg 背景 / card 卡片 / ink 文字 / sub 次要文字 / line 分割线 / accent 主色 / me 我的气泡 / them 对方气泡）。
  * 'default' 是原样（跟随系统深浅色），不要删。 */
 /* 选图 -> 压缩成 jpeg 数据（避免撑爆存储） */
+/* 原图：不经过 canvas，直接读成 dataURL，画质不损失 */
+function pickOriginal(cb) {
+  var f = h('input', { type: 'file', accept: 'image/*' });
+  f.addEventListener('change', function () {
+    var file = f.files[0]; if (!file) return;
+    var r = new FileReader();
+    r.onload = function () { if (file.size > 8 * 1024 * 1024) toast('原图 ' + (file.size / 1048576).toFixed(1) + 'MB，较大，已照原样保存'); cb(String(r.result)); };
+    r.onerror = function () { toast('读取图片失败'); };
+    r.readAsDataURL(file);
+  });
+  f.click();
+}
 function pickImage(maxDim, quality, cb) {
   var f = h('input', { type: 'file', accept: 'image/*' });
   f.addEventListener('change', function () {
@@ -3005,10 +3231,18 @@ onShow['s-chatset'] = function () {
   var tokHost = h('div', { class: 'glass' }); body.appendChild(tokHost); renderTokenCard(tokHost);
   var prev = h('div', { class: 'bg-prev', text: cur.chatBg ? '' : '未设置背景' });
   if (cur.chatBg) prev.style.backgroundImage = 'url("' + cur.chatBg + '")';
+  var bgUrl = h('input', { type: 'text', placeholder: 'https://… 图片网址', style: 'flex:1;min-width:0;border:1px solid var(--line);border-radius:8px;padding:8px;background:transparent;color:inherit' });
   body.appendChild(h('div', { class: 'glass' }, h('h4', { text: '聊天背景（只对「' + cur.name + '」生效）' }), prev,
     h('div', { class: 'btn-row' },
-      h('button', { class: 'btn primary', text: '上传图片', onclick: function () { pickImage(1280, 0.75, async function (d) { cur.chatBg = d; await saveCur(); applyChatLook(); onShow['s-chatset'](); }); } }),
-      h('button', { class: 'btn', text: '清除', onclick: async function () { cur.chatBg = ''; await saveCur(); applyChatLook(); onShow['s-chatset'](); } }))));
+      h('button', { class: 'btn primary', text: '上传原图（不压缩）', onclick: function () { pickOriginal(async function (d) { cur.chatBg = d; await saveCur(); applyChatLook(); onShow['s-chatset'](); }); } }),
+      h('button', { class: 'btn', text: '上传（压缩省空间）', onclick: function () { pickImage(1920, 0.92, async function (d) { cur.chatBg = d; await saveCur(); applyChatLook(); onShow['s-chatset'](); }); } }),
+      h('button', { class: 'btn', text: '清除', onclick: async function () { cur.chatBg = ''; await saveCur(); applyChatLook(); onShow['s-chatset'](); } })),
+    h('div', { class: 'btn-row', style: 'margin-top:8px;align-items:center' }, bgUrl,
+      h('button', { class: 'btn', text: '使用网址', onclick: async function () {
+        var u = bgUrl.value.trim(); if (!/^https?:\/\//i.test(u)) { toast('请填 http(s):// 开头的图片网址'); return; }
+        cur.chatBg = u; await saveCur(); applyChatLook(); onShow['s-chatset']();
+      } })),
+    h('div', { class: 'hint', style: 'margin-top:6px', text: '原图不压缩，画质不会变差；图很大（超过约 8MB）会占不少存储。网址方式几乎不占存储，但图床失效背景就没了。' })));
   /* 自动翻译：译文显示在对方每条消息的气泡下面一行；走免费翻译，不消耗你的 AI 请求 */
   var tcfg = cur.translate || { on: false, from: 'auto', to: 'zh-CN' };
   function langSel(withAuto, val, on) {
@@ -3322,7 +3556,17 @@ function pickModel(mk, bk, kk, done) {
   openBottomSheet([h('h3', { text: '选择模型' }), q, list, info, h('div', { class: 'btn-row', style: 'margin-top:8px' }, pull, h('button', { type: 'button', class: 'btn', text: '关闭', onclick: closeSheet }))]);
   render();
 }
+/* TTS、副 API 两张卡片挪到「主 API」卡片下面、「输出方式」上面 */
 function buildSettings() {
+  buildSettingsBase();
+  var body = $('settings-body'), kids = Array.prototype.slice.call(body.children);
+  function pair(txt) { var i = kids.findIndex(function (n) { return n.classList.contains('group-title') && n.textContent.indexOf(txt) === 0; }); return i < 0 ? null : [kids[i], kids[i + 1]]; }
+  var main = pair('主 API'), tts = pair('语音合成'), sub = pair('副 API');
+  if (!main || !tts || !sub) return;
+  var ref = main[1].nextSibling;
+  [tts, sub].forEach(function (p) { body.insertBefore(p[0], ref); body.insertBefore(p[1], ref); });
+}
+function buildSettingsBase() {
   function tempField() {
     var v = h('span', { class: 'val', text: Number(draft.temperature).toFixed(1) });
     var r = h('input', { type: 'range', min: '0', max: '2', step: '0.1', value: String(draft.temperature) });
@@ -3371,6 +3615,18 @@ function buildSettings() {
   body.appendChild(h('div', { class: 'group' },
     field('发语音给 AI 的方式', vsSel, '直接发音频：AI 自己听语气，不用先转文字，也不多一次请求（只发还没被回复过的那条语音，之后变成文字）。模型听不了音频时选「只发文字」'),
     field('语音识别语言', asrSel, '录音时实时识别、长按「转文字」都用这个语言')));
+  var tc = ttsCfg();
+  function ttsF(key, label, ph, type, hint) {
+    var i = h('input', { type: type || 'text', placeholder: ph, value: key === 'model' ? tc.model : tc[key], autocomplete: 'off' });
+    i.addEventListener('change', function () { tc[key] = i.value.trim(); ttsSave(tc); });
+    return field(label, i, hint);
+  }
+  body.appendChild(h('div', { class: 'group-title', text: '语音合成（TTS，兼容 OpenAI 格式；AI 发语音条时用）' }));
+  body.appendChild(h('div', { class: 'group' },
+    ttsF('url', 'TTS 接口地址', 'https://你的接口域名', 'text', '末尾没写 /v1/audio/speech 会自动补上。只存在这台设备的浏览器里'),
+    ttsF('key', 'TTS 密钥（API Key）', 'sk-…', 'password'),
+    ttsF('voice', '音色 ID（Voice ID）', '填服务商给的音色 ID', 'text'),
+    ttsF('model', '模型名称', 'tts-1', 'text', '留空则用 tts-1。输入框改完点别处就自动保存，不用点右上角「保存」')));
   body.appendChild(h('div', { class: 'group-title', text: '副 API（总结、精炼记忆；留空则用主 API）' }));
   body.appendChild(h('div', { class: 'group' },
     txt('secBaseUrl', '反代地址', 'text', '留空使用主 API'), txt('secApiKey', 'API Key', 'password', '可选'), modelField('模型', 'secModel', 'secBaseUrl', 'secApiKey', '建议用便宜的小模型')));
@@ -4056,7 +4312,7 @@ $('b-beauty-save').onclick = function () { beautySnap = snapBeauty(); iosAlert('
 /* ====================================================================
  * 网易云音乐 / 一起听
  * 三块：① 数据源（NeteaseCloudMusicApi 接口 + 本地歌单）② 本地播放状态机（单人听歌 / 双人一起听）③ 搭车聊天请求
- *  · 网页不能直连网易云（跨域），要在「网易云音乐」页最下面填一个 NeteaseCloudMusicApi 接口地址（https）。
+ *  · 网页不能直连网易云（跨域），要在「网易云音乐」页右上角设置里填一个 NeteaseCloudMusicApi 接口地址（https）。
  *  · 歌单存在 IndexedDB 的 playlists 表：每个人（我 / 每个角色）一份 { id:'pl-<owner>', owner, songs:[{id,name,artist,cover,dt}] }，不走网络。
  *  · 全局只有一个 Audio。桌面「网易云音乐」= 单人后台听歌，不弹悬浮窗、不碰提示词；
  *    聊天里点「＋ → 一起听」才绑定当前角色：弹双人头像悬浮窗，并在每次聊天请求里顺带带上「正在听什么、唱到哪句」，
@@ -4161,14 +4417,19 @@ async function muPlayAt(i) {
 }
 function muNext(dir) {
   if (!mu.queue.length) return;
-  var n = mu.queue.length, i = (mu.idx + (dir || 1) + n) % n; muPlayAt(i);
+  var n = mu.queue.length, i = (mu.idx + (dir || 1) + n) % n;
+  if (muMode() === 'shuffle' && n > 1) { do { i = Math.floor(Math.random() * n); } while (i === mu.idx); }
+  muPlayAt(i);
 }
 function muToggle() {
   if (!mu.song) return;
   if (mu.audio.paused) mu.audio.play().catch(function () {}); else mu.audio.pause();
 }
 function muStop() { mu.tk++; mu.audio.pause(); mu.audio.removeAttribute('src'); mu.song = null; mu.queue = []; mu.idx = -1; mu.lrc = []; mu.together = null; muUI(); }
-mu.audio.addEventListener('ended', function () { muNext(1); });
+mu.audio.addEventListener('ended', function () {
+  if (muMode() === 'one' && mu.song) { mu.audio.currentTime = 0; mu.audio.play().catch(function () { muPlayAt(mu.idx); }); return; }
+  muNext(1);
+});
 mu.audio.addEventListener('play', muUI); mu.audio.addEventListener('pause', muUI);
 mu.audio.addEventListener('playing', function () { mu.fail = 0; muUI(); });
 mu.audio.addEventListener('error', function () {
@@ -4226,25 +4487,107 @@ function muUI() {
 function muMarkRows() { document.querySelectorAll('#music-body .mu-row[data-sid]').forEach(function (r) { r.classList.toggle('on', !!mu.song && String(mu.song.id) === r.getAttribute('data-sid')); }); }
 
 /* 聊天里的「一起听」悬浮窗：双人头像呼吸灯 + 当前歌词，点开展开滚动歌词 */
+/* ---- 一起听悬浮窗：长条 / 迷你球两种形态，可拖动并记位置；迷你球时顶栏正中显示歌名+歌词（长按可调位） ---- */
+function lpLoad(k) { try { return JSON.parse(localStorage.getItem(k) || 'null'); } catch (e) { return null; } }
+function lpSave(k, v) { try { localStorage.setItem(k, typeof v === 'string' ? v : JSON.stringify(v)); } catch (e) {} }
+var lpMode = (function () { try { return localStorage.getItem('mp_lp_mode') === 'ball' ? 'ball' : 'bar'; } catch (e) { return 'bar'; } })();
+var lpDragged = false;
+function lpDims(mode) {
+  var host = $('s-chat'), pop = $('listen-pop');
+  if (mode === 'ball') return { w: 70, h: 46 };
+  return { w: Math.min(host.clientWidth * 0.92, 360), h: pop.classList.contains('open') ? pop.offsetHeight : 50 };
+}
+function lpClamp(l, t, d) { var host = $('s-chat'); return { l: Math.max(0, Math.min(host.clientWidth - d.w, l)), t: Math.max(0, Math.min(host.clientHeight - d.h, t)) }; }
+function lpApplyPos() {
+  var pop = $('listen-pop'), pos = lpLoad('mp_lp_pos'); if (!pop) return;
+  if (!pos || typeof pos.l !== 'number') { pop.style.left = ''; pop.style.top = ''; pop.style.transform = ''; return; }
+  var c = lpClamp(pos.l, pos.t, lpDims(lpMode));
+  pop.style.left = c.l + 'px'; pop.style.top = c.t + 'px'; pop.style.transform = 'none';
+}
+/* 切换形态：以当前中心点为准变形（不跳位置），带过渡动画 */
+function lpSetMode(m) {
+  var pop = $('listen-pop'), host = $('s-chat'), hr = host.getBoundingClientRect(), r = pop.getBoundingClientRect();
+  var cx = r.left - hr.left + r.width / 2, cy = r.top - hr.top + r.height / 2;
+  pop.style.transition = 'none'; pop.style.left = (r.left - hr.left) + 'px'; pop.style.top = (r.top - hr.top) + 'px'; pop.style.transform = 'none'; void pop.offsetWidth; pop.style.transition = '';
+  pop.classList.remove('open');
+  lpMode = m; lpSave('mp_lp_mode', m);
+  var d = lpDims(m), c = lpClamp(cx - d.w / 2, cy - d.h / 2, d);
+  lpSave('mp_lp_pos', { l: c.l, t: c.t });
+  refreshListenPop();
+}
+function lpTopApply() { var t = $('lp-top'), o = lpLoad('mp_lp_top') || {}; if (t) { t.style.setProperty('--dx', (o.dx || 0) + 'px'); t.style.setProperty('--dy', (o.dy || 0) + 'px'); } }
 function ensureListenPop() {
   var pop = $('listen-pop'); if (!pop || pop.firstChild) return pop;
-  pop.appendChild(h('div', { class: 'lp-pill', onclick: function () { pop.classList.toggle('open'); muLrcUI(); } },
+  var pill = h('div', { class: 'lp-pill' },
     h('div', { class: 'lp-avs', id: 'lp-avs' }), h('div', { class: 'lp-txt' }, h('div', { class: 'mu-name', id: 'lp-name' }), h('div', { class: 'mu-lrc', id: 'lp-line' })),
-    (function () { var b = muBtn(muPlaySvg, muToggle, 'lp-play'); b.id = 'lp-play'; return b; })()));
+    (function () { var b = muBtn(muPlaySvg, muToggle, 'lp-play'); b.id = 'lp-play'; return b; })());
+  pop.appendChild(pill);
   pop.appendChild(h('div', { class: 'lp-more' }, h('div', { class: 'lp-lrc', id: 'lp-lrc' }),
-    h('div', { class: 'lp-ctl' }, muBtn(muPrevSvg, function () { muNext(-1); }), muBtn(muNextSvg, function () { muNext(1); }),
+    h('div', { class: 'lp-ctl' }, (function () { var mb = muBtn('', function () { muCycleMode(); }, 'lp-mode'); mb.id = 'lp-mode'; return mb; })(), muBtn(muPrevSvg, function () { muNext(-1); }), muBtn(muNextSvg, function () { muNext(1); }),
       h('button', { type: 'button', class: 'lp-end', text: '结束一起听', onclick: function (e) { e.stopPropagation(); muUnbind(true); } }))));
+  /* 点击：点歌名区 = 展开/收起歌词；点头像、空白处 = 长条 ⇄ 迷你球。按钮自己 stopPropagation，不会触发 */
+  pill.addEventListener('click', function (e) {
+    if (lpDragged || e.target.closest('.mu-ic')) return;
+    if (lpMode === 'bar' && e.target.closest('.lp-txt')) { pop.classList.toggle('open'); muLrcUI(); return; }
+    lpSetMode(lpMode === 'bar' ? 'ball' : 'bar');
+  });
+  /* 拖动：位移超过 5px 才算拖，松手不触发点击；限制在聊天页可视区内 */
+  var st = null;
+  pill.addEventListener('pointerdown', function (e) {
+    if (e.target.closest('.mu-ic')) return;
+    var hr = $('s-chat').getBoundingClientRect(), r = pop.getBoundingClientRect();
+    st = { id: e.pointerId, x: e.clientX, y: e.clientY, l: r.left - hr.left, t: r.top - hr.top, moved: false };
+    document.addEventListener('pointermove', mvf); document.addEventListener('pointerup', end); document.addEventListener('pointercancel', end);
+  });
+  function mvf(e) {
+    if (!st || e.pointerId !== st.id) return;
+    var dx = e.clientX - st.x, dy = e.clientY - st.y;
+    if (!st.moved && Math.hypot(dx, dy) <= 5) return;
+    if (!st.moved) { st.moved = true; pop.classList.add('dragging'); pop.style.transform = 'none'; try { pill.setPointerCapture(e.pointerId); } catch (er) {} }
+    var host = $('s-chat'), l = Math.max(0, Math.min(host.clientWidth - pop.offsetWidth, st.l + dx)), t = Math.max(0, Math.min(host.clientHeight - pop.offsetHeight, st.t + dy));
+    pop.style.left = l + 'px'; pop.style.top = t + 'px'; st.cl = l; st.ct = t; lpSave('mp_lp_pos', { l: l, t: t }); e.preventDefault();
+  }
+  function end(e) {
+    document.removeEventListener('pointermove', mvf); document.removeEventListener('pointerup', end); document.removeEventListener('pointercancel', end);
+    if (!st || e.pointerId !== st.id) return;
+    if (st.moved) { lpSave('mp_lp_pos', { l: st.cl, t: st.ct }); lpDragged = true; setTimeout(function () { lpDragged = false; }, 80); }
+    pop.classList.remove('dragging'); st = null;
+  }
+  /* 迷你球时，顶栏正中的歌名+歌词；长按约 400ms 后可拖到别处，位置记在 localStorage */
+  var top = h('div', { id: 'lp-top' }, h('div', { class: 'mu-name', id: 'lp-top-name' }), h('div', { class: 'mu-lrc', id: 'lp-top-line' }));
+  $('s-chat').appendChild(top); lpTopApply();
+  var ts = null;
+  top.addEventListener('pointerdown', function (e) {
+    var o = lpLoad('mp_lp_top') || {};
+    ts = { id: e.pointerId, x: e.clientX, y: e.clientY, dx: o.dx || 0, dy: o.dy || 0, on: false, nx: o.dx || 0, ny: o.dy || 0 };
+    try { top.setPointerCapture(e.pointerId); } catch (er) {}
+    ts.timer = setTimeout(function () { if (!ts) return; ts.on = true; top.classList.add('drag'); if (navigator.vibrate) { try { navigator.vibrate(12); } catch (er) {} } }, 400);
+  });
+  top.addEventListener('pointermove', function (e) {
+    if (!ts || e.pointerId !== ts.id) return;
+    var mx = e.clientX - ts.x, my = e.clientY - ts.y;
+    if (!ts.on) { if (Math.hypot(mx, my) > 8) { clearTimeout(ts.timer); ts = null; } return; }
+    var host = $('s-chat'), hw = host.clientWidth / 2;
+    ts.nx = Math.max(-hw, Math.min(hw, ts.dx + mx)); ts.ny = Math.max(-8, Math.min(host.clientHeight - 60, ts.dy + my));
+    top.style.setProperty('--dx', ts.nx + 'px'); top.style.setProperty('--dy', ts.ny + 'px'); e.preventDefault();
+  });
+  function tend(e) { if (!ts || e.pointerId !== ts.id) return; clearTimeout(ts.timer); if (ts.on) lpSave('mp_lp_top', { dx: ts.nx, dy: ts.ny }); top.classList.remove('drag'); ts = null; }
+  top.addEventListener('pointerup', tend); top.addEventListener('pointercancel', tend);
+  top.addEventListener('contextmenu', function (e) { e.preventDefault(); });
   return pop;
 }
 function refreshListenPop() {
   var pop = ensureListenPop(); if (!pop) return;
   var on = !!(mu.together && cur && mu.together === cur.id && mu.song);
-  pop.classList.toggle('on', on); if (!on) { pop.classList.remove('open'); return; }
+  pop.classList.toggle('on', on); pop.classList.toggle('ball', lpMode === 'ball');
+  $('lp-top').classList.toggle('on', on && lpMode === 'ball');
+  if (!on) { pop.classList.remove('open'); return; }
   var playing = !mu.audio.paused; pop.classList.toggle('paused', !playing);
   var avs = $('lp-avs'); avs.innerHTML = '';
   avs.appendChild(avatarNode(cur.userAvatar || myProfile().avatar, myProfile().name)); avs.appendChild(avatarNode(cur.avatar, cur.name));
-  $('lp-name').textContent = mu.song.name + ' · ' + mu.song.artist;
+  var nm = mu.song.name + ' · ' + mu.song.artist; $('lp-name').textContent = nm; $('lp-top-name').textContent = nm;
   $('lp-play').innerHTML = playing ? muPauseSvg : muPlaySvg;
+  lpApplyPos(); lpTopApply(); muModeUI();
   muLrcUI();
 }
 function muBuildLrcPanel() {
@@ -4253,7 +4596,7 @@ function muBuildLrcPanel() {
   mu.lrc.forEach(function (l, i) { box.appendChild(h('div', { class: 'lp-l', 'data-i': String(i), text: l.text })); });
 }
 function muLrcUI() {
-  var ln = $('lp-line'); if (ln) ln.textContent = muCurLine() || (mu.loading ? '加载中…' : '♪');
+  var ln = $('lp-line'), cl = muCurLine() || (mu.loading ? '加载中…' : '♪'); if (ln) ln.textContent = cl; var tl = $('lp-top-line'); if (tl) tl.textContent = cl;
   var box = $('lp-lrc'); if (!box) return;
   var old = box.querySelector('.lp-l.on'); if (old) old.classList.remove('on');
   var el = mu.lrcI >= 0 ? box.querySelector('.lp-l[data-i="' + mu.lrcI + '"]') : null;
@@ -4266,7 +4609,7 @@ async function muTogetherToggle() {
   if (!cur) return;
   if (mu.together === cur.id) { muUnbind(true); return; }
   if (mu.song) { mu.together = cur.id; refreshListenPop(); toast('开始和 ' + cur.name + ' 一起听《' + mu.song.name + '》'); return; }
-  if (!muBase()) { iosAlert('还没配接口', '先去桌面「网易云音乐」最下面填接口地址、导入歌单'); return; }
+  if (!muBase()) { iosAlert('还没配接口', '先去桌面「网易云音乐」右上角设置里填接口地址、导入歌单'); return; }
   var mine = await muGetList('me'), his = await muGetList(cur.id), ch = cur;
   function start(list, owner) {
     if (!list.songs.length) { toast('这个歌单还是空的，先去「网易云音乐」添加歌'); return; }
@@ -4327,29 +4670,29 @@ async function renderMusic() {
   var body = $('music-body'), top = $('s-music').querySelector('.scroll').scrollTop;
   var owners = await muOwners(); if (!owners.some(function (o) { return o.id === muOwner; })) muOwner = 'me';
   var cur0 = owners.find(function (o) { return o.id === muOwner; }), pl = await muGetList(muOwner);
-  body.innerHTML = '';
+  body.innerHTML = ''; var topBox = $('music-top'); topBox.innerHTML = '';
   if (!muBase()) {
-    var tip = h('div', { class: 'mu-tip', text: '还没配接口。网页不能直接访问网易云（跨域），需要一个 NeteaseCloudMusicApi 接口地址（https 开头）——可以自己部署（Vercel 等免费平台），或用别人提供的。填在本页最下面「接口设置」里。' }); body.appendChild(tip);
+    var tip = h('div', { class: 'mu-tip', text: '还没配接口。网页不能直接访问网易云（跨域），需要一个 NeteaseCloudMusicApi 接口地址（https 开头）——可以自己部署（Vercel 等免费平台），或用别人提供的。填在右上角齿轮「音乐接口设置」里。' }); body.appendChild(tip);
   }
   var chips = h('div', { class: 'mu-owners' });
   owners.forEach(function (o) {
     var b = h('button', { type: 'button', class: 'mu-chip' + (o.id === muOwner ? ' on' : ''), onclick: function () { muOwner = o.id; muResults = null; renderMusic(); } }, avatarNode(o.avatar, o.name), h('span', { text: o.name }));
     chips.appendChild(b);
   });
-  body.appendChild(h('div', { class: 'group-title', text: '歌单主页（点头像切换：我 / 每个角色各一份）' })); body.appendChild(chips);
+  topBox.appendChild(h('div', { class: 'group-title', text: '歌单主页（点头像切换：我 / 每个角色各一份）' })); topBox.appendChild(chips);
   /* 导入 + 搜索 */
   var imp = h('input', { type: 'text', placeholder: '粘贴歌单链接或歌单 ID', value: muImpTxt }), kw = h('input', { type: 'text', placeholder: '搜歌名 / 歌手', value: muKw });
   imp.addEventListener('input', function () { muImpTxt = imp.value; }); kw.addEventListener('input', function () { muKw = kw.value; });
   var resBox = h('div', {});
   async function doImport() {
-    if (!muBase()) { toast('先在最下面填接口地址'); return; }
+    if (!muBase()) { toast('先点右上角设置填接口地址'); return; }
     if (!imp.value.trim()) { toast('先粘贴歌单链接或 ID'); return; }
     toast('正在导入…');
     try { var songs = await muImportPlaylist(imp.value), n = await muAdd(muOwner, songs); muImpTxt = ''; iosAlert('导入完成', '「' + cur0.name + '」的歌单新增 ' + n + ' 首（歌单共 ' + songs.length + ' 首）'); renderMusic(); }
     catch (e) { showError(e, { label: '导入失败' }); }
   }
   async function doSearch() {
-    if (!muBase()) { toast('先在最下面填接口地址'); return; }
+    if (!muBase()) { toast('先点右上角设置填接口地址'); return; }
     var k = kw.value.trim(); if (!k) return;
     toast('搜索中…');
     try { muResults = await muSearch(muBase(), k); drawResults(); } catch (e) { showError(e, { label: '搜索失败' }); }
@@ -4364,7 +4707,7 @@ async function renderMusic() {
     });
     resBox.appendChild(card);
   }
-  body.appendChild(h('div', { class: 'group' },
+  topBox.appendChild(h('div', { class: 'group' },
     h('div', { class: 'field mu-line' }, imp, h('button', { type: 'button', class: 'btn', text: '导入', onclick: doImport })),
     h('div', { class: 'field mu-line' }, kw, h('button', { type: 'button', class: 'btn', text: '搜索', onclick: doSearch }))));
   kw.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); doSearch(); } });
@@ -4389,24 +4732,42 @@ async function renderMusic() {
     body.appendChild(h('div', { class: 'btn-row', style: 'margin-top:10px' }, h('button', { class: 'btn', text: '顺序播放全部', onclick: function () { muPlayQueue(pl.songs, 0, muOwner); } }),
       h('button', { class: 'btn danger', text: '清空这个歌单', onclick: function () { confirmSheet('清空「' + cur0.name + '」的歌单？', '清空', async function () { pl.songs = []; await dbPut('playlists', pl); renderMusic(); }, true); } })));
   }
-  /* 接口设置 */
+  $('s-music').querySelector('.scroll').scrollTop = top;
+}
+onShow['s-music'] = function () { renderMusic(); muModeUI(); };
+/* 音乐接口设置（右上角齿轮打开） */
+function openMusicSettings() {
   var api = h('input', { type: 'text', placeholder: 'https://你的接口地址（不要带结尾的 /）', value: settings.musicApi || '' }), bk = h('input', { type: 'text', placeholder: '备用音源接口地址（可留空）', value: settings.musicApiBackup || '' });
   function saveApi() {
     settings.musicApi = api.value.trim().replace(/\/+$/, ''); settings.musicApiBackup = bk.value.trim().replace(/\/+$/, ''); saveSettings();
     if (location.protocol === 'https:' && /^http:/i.test(settings.musicApi + ' ' + settings.musicApiBackup)) toast('网页是 https，接口地址也要 https，否则会被浏览器拦');
   }
-  api.addEventListener('change', function () { saveApi(); renderMusic(); }); bk.addEventListener('change', saveApi);
-  body.appendChild(h('div', { class: 'group-title', text: '接口设置' }));
-  body.appendChild(h('div', { class: 'group' }, field('主接口（NeteaseCloudMusicApi）', api, '用来搜歌、导入歌单、取歌词和播放直链'),
-    field('备用音源', bk, '主接口拿不到完整音频（VIP / 只有试听）时，自动到这里用「歌名+歌手」搜索，换一个能放的版本；接口格式同 NeteaseCloudMusicApi'),
-    h('div', { class: 'field' }, h('button', { type: 'button', class: 'btn', text: '测试主接口', onclick: async function () {
-      saveApi(); if (!muBase()) { toast('先填接口地址'); return; }
-      try { var r = await muSearch(muBase(), '周杰伦'); iosAlert(r.length ? '连接正常' : '连上了', r.length ? '搜到 ' + r.length + ' 首歌' : '接口有响应，但没搜到结果'); } catch (e) { showError(e, { label: '测试失败' }); }
-    } }))));
-  body.appendChild(h('div', { class: 'hint', style: 'color:var(--sub);font-size:12px;line-height:1.7;padding:0 4px 12px', text: '这里是你自己的私人播放器：点歌就在后台播放，不会弹出双人悬浮窗，也不会把歌名告诉角色。想和 TA 一起听，去和 TA 的聊天里点「＋ → 一起听」。' }));
-  $('s-music').querySelector('.scroll').scrollTop = top;
+  openSheet([h('h3', { text: '音乐接口设置' }),
+    h('div', { style: 'text-align:left' }, field('主接口（NeteaseCloudMusicApi）', api, '用来搜歌、导入歌单、取歌词和播放直链'),
+      field('备用音源', bk, '主接口拿不到完整音频（VIP / 只有试听）时，自动到这里用「歌名+歌手」搜索，换一个能放的版本；接口格式同 NeteaseCloudMusicApi')),
+    h('div', { class: 'btn-row' },
+      h('button', { class: 'btn primary', text: '保存', onclick: function () { saveApi(); closeSheet(); renderMusic(); toast('已保存'); } }),
+      h('button', { class: 'btn', text: '测试主接口', onclick: async function () {
+        saveApi(); if (!muBase()) { toast('先填接口地址'); return; }
+        try { var r = await muSearch(muBase(), '周杰伦'); iosAlert(r.length ? '连接正常' : '连上了', r.length ? '搜到 ' + r.length + ' 首歌' : '接口有响应，但没搜到结果'); } catch (e) { showError(e, { label: '连接失败' }); }
+      } }),
+      h('button', { class: 'btn', text: '取消', onclick: closeSheet })),
+    h('div', { class: 'hint', style: 'color:var(--sub);font-size:12px;line-height:1.7;text-align:left;margin-top:8px', text: '这里是你自己的私人播放器：点歌就在后台播放，不会弹出双人悬浮窗，也不会把歌名告诉角色。想和 TA 一起听，去和 TA 的聊天里点「＋ → 一起听」。' })]);
 }
-onShow['s-music'] = renderMusic;
+/* 播放模式：列表循环 / 单曲循环 / 随机（存 localStorage mp_mu_mode） */
+var MU_MODES = [['list', '列表循环', 'M17 2l4 4-4 4M3 11V9a3 3 0 0 1 3-3h15M7 22l-4-4 4-4M21 13v2a3 3 0 0 1-3 3H3'], ['one', '单曲循环', 'M17 2l4 4-4 4M3 11V9a3 3 0 0 1 3-3h15M7 22l-4-4 4-4M21 13v2a3 3 0 0 1-3 3H3M11 10l1.5-1v6'], ['shuffle', '随机播放', 'M16 3h5v5M4 20L21 3M21 16v5h-5M15 15l6 6M4 4l5 5']];
+function muMode() { try { var v = localStorage.getItem('mp_mu_mode'); if (v === 'one' || v === 'shuffle') return v; } catch (e) {} return 'list'; }
+function muModeUI() {
+  var m = MU_MODES.find(function (x) { return x[0] === muMode(); }), svg = '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="' + m[2] + '"/></svg>';
+  ['b-mu-mode', 'lp-mode'].forEach(function (id) { var b = $(id); if (b) { b.innerHTML = svg; b.title = m[1]; b.setAttribute('aria-label', m[1]); } });
+}
+function muCycleMode() {
+  var i = MU_MODES.findIndex(function (x) { return x[0] === muMode(); }), n = MU_MODES[(i + 1) % MU_MODES.length];
+  try { localStorage.setItem('mp_mu_mode', n[0]); } catch (e) {}
+  muModeUI(); toast(n[1]);
+}
+$('b-mu-mode').onclick = muCycleMode;
+$('b-mu-set').onclick = openMusicSettings;
 muUI();
 
 /* 打开聊天后刷新一起听悬浮窗（只有绑定的就是这个角色才显示） */
