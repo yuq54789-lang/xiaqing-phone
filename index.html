@@ -39,6 +39,12 @@
     <div class="scroll" id="moments-body"></div>
   </section>
 
+  <section class="screen" id="s-music">
+    <header class="bar"><button class="icon" data-back aria-label="返回">‹</button><h1>网易云音乐</h1></header>
+    <div class="scroll"><div class="pad" id="music-body"></div></div>
+    <div id="music-mini" hidden></div>
+  </section>
+
   <section class="screen" id="s-me">
     <header class="bar"><button class="icon" data-back aria-label="返回">‹</button><h1>个人主页</h1></header>
     <div class="scroll" id="me-body"></div>
@@ -55,6 +61,7 @@
       <button class="icon" id="b-search" aria-label="搜索聊天记录"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg></button>
       <button class="icon" id="b-chatmenu" aria-label="菜单">⋯</button>
     </header>
+    <div id="listen-pop"></div>
     <div id="msgs" class="scroll"></div>
     <div id="quote-bar" hidden><span id="quote-text"></span><button type="button" id="quote-x" aria-label="取消引用">✕</button></div>
     <div id="selbar" hidden><span id="sel-n">已选 0 条</span><button type="button" class="pill ghost" id="sel-edit">编辑</button><button type="button" class="pill ghost" id="sel-copy">复制</button><button type="button" class="pill ghost" id="sel-del">删除</button><button type="button" class="pill" id="sel-cancel">取消</button></div>

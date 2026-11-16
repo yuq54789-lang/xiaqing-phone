@@ -5,7 +5,7 @@
  * ===================================================================== */
 
 /* ---------- ① 数据库（原生 IndexedDB，无需外部库） ---------- */
-var DB_NAME = 'myphone', DB_VER = 5, db = null;
+var DB_NAME = 'myphone', DB_VER = 6, db = null;
 var STORES = {
   characters: { keyPath: 'id' },
   messages: { keyPath: 'id', index: [['byChar', ['characterId', 'ts', 'id']]] },
@@ -19,6 +19,7 @@ var STORES = {
   miniPresets: { keyPath: 'id' },      /* 小预设：字体 / 提示音 / 美化 CSS / 气泡 CSS，每项单独存 */
   stickers: { keyPath: 'id' },
   stickerCategories: { keyPath: 'id' },
+  playlists: { keyPath: 'id' },        /* 音乐歌单：每人（我 / 每个角色）一份 */
   moments: { keyPath: 'id' },          /* 朋友圈动态（含点赞、评论） */
   settings: { keyPath: 'key' }
 };
@@ -107,7 +108,7 @@ var DEFAULTS = {
   baseUrl: '', apiKey: '', model: '', temperature: 0.8,
   stream: false, themeId: 'default', customCss: '', homeBg: '', fontUrl: '', fontData: '', fontName: '',
   secBaseUrl: '', secApiKey: '', secModel: '',
-  scanDepth: 5, worldBookMaxChars: 6000, memoryLimit: 20, summaryMax: 200, defaultContext: 30, stickerPromptLimit: 60, autoReply: false, myProfile: null, apiPresets: [], activePresetId: null, weather: null, homeLayout: null,
+  scanDepth: 5, worldBookMaxChars: 6000, memoryLimit: 20, summaryMax: 200, defaultContext: 30, stickerPromptLimit: 60, autoReply: false, myProfile: null, musicApi: '', musicApiBackup: '', apiPresets: [], activePresetId: null, weather: null, homeLayout: null,
   bubbleSlow: 1,                 /* 气泡出现速度倍数：1=默认，越大越慢 */
   notifyUrl: '', notifyName: '', /* 消息提示音（网址 / 上传的文件名） */
   clockLayout: 'h', clockColor: '', dateColor: '', wxColor: '', clockDy: 0, dateDy: 0, wxDy: 0, clockDx: 0, dateDx: 0, wxDx: 0,   /* 时钟：横/竖排、三处文字颜色、三处上下及左右位置（互不绑定） */
@@ -241,6 +242,7 @@ function buildSystem(ctx) {
   }
   L.push('# 回复要求\n' + (c.offlineMode ? offlineRules(c, ctx.preset) : OUTPUT_RULES));
   if (ctx.wantThought) L.push('# 心声（附加输出）\n' + THOUGHT_RULES);
+  if (ctx.musicText) L.push(ctx.musicText);
   if (ctx.momentsText) L.push(ctx.momentsText + '\n\n# 朋友圈（附加输出）\n' + MOMENT_RULES);
   if (ctx.changes) L.push('# 消息的变动\n用户有时会撤回、删除或编辑消息。方括号里的「[用户撤回了一条消息。撤回前的内容：…]」「[用户删除了…]」和消息后面的「（…原文是…）」就是你看到的变动，你确实知道原来写了什么。像真人一样自然地反应（好奇、调侃、装作没看见都行，看角色性格），不要机械复述这些提示，也不要每次都点破。');
   if (c.aiVoice && !c.offlineMode) L.push('# 发语音\n想发语音消息时，把那一条单独写成一行：[语音：说的话]。方括号里就是语音里说的原话（口语、带语气词），会自动显示成文字，不用再重复。偶尔用，适合轻声说话、撒娇、叹气、情绪起伏的时候；每次回复最多 1 条。');
@@ -582,7 +584,7 @@ function extractMoments(text) {
 }
 
 /* 导出给测试用 */
-if (typeof module !== 'undefined') module.exports = { extractMoments: extractMoments, extractThought: extractThought, offlineRules: offlineRules, selectMemories: selectMemories, triggeredEntries: triggeredEntries, pickMemories: pickMemories, buildSystem: buildSystem, msgToText: msgToText, toApiMessages: toApiMessages, splitReply: splitReply, parseThought: parseThought, openaiUrl: openaiUrl, stickerPool: stickerPool, sampleStickers: sampleStickers, parseReplyLines: parseReplyLines, findSticker: findSticker };
+if (typeof module !== 'undefined') module.exports = { extractMusicCmd: extractMusicCmd, extractMoments: extractMoments, extractThought: extractThought, offlineRules: offlineRules, selectMemories: selectMemories, triggeredEntries: triggeredEntries, pickMemories: pickMemories, buildSystem: buildSystem, msgToText: msgToText, toApiMessages: toApiMessages, splitReply: splitReply, parseThought: parseThought, openaiUrl: openaiUrl, stickerPool: stickerPool, sampleStickers: sampleStickers, parseReplyLines: parseReplyLines, findSticker: findSticker };
 
 /* ---------- ⑤ 界面 ---------- */
 var $ = function (id) { return document.getElementById(id); };
@@ -595,7 +597,7 @@ var UI_LANGS = [['zh', '简体中文'], ['zh-TW', '繁體中文'], ['en', 'Engli
 var uiLang = 'zh', uiDict = null;
 try { uiLang = localStorage.getItem('mp-lang') || 'zh'; if (uiLang !== 'zh') uiDict = JSON.parse(localStorage.getItem('mp-i18n-' + uiLang) || 'null'); if (!uiDict) uiLang = 'zh'; } catch (e) { uiLang = 'zh'; uiDict = null; }
 function T(s) { return (uiDict && typeof s === 'string' && uiDict[s]) || s; }
-var T_SKIP = /\b(bubble|last|msg|quote|trans|cl-voice|cl-jot|stk-name|name-edit|mo-text|mo-name|mo-cm|mo-likes|mo-sign)\b/;
+var T_SKIP = /\b(bubble|last|msg|quote|trans|cl-voice|cl-jot|stk-name|name-edit|mo-text|mo-name|mo-cm|mo-likes|mo-sign|mu-name|mu-sub|mu-lrc|lp-l)\b/;
 function applyStaticI18n() {
   if (!uiDict) return;
   document.documentElement.lang = uiLang === 'zh-TW' ? 'zh-TW' : uiLang;
@@ -834,7 +836,7 @@ var APPS = [
   { name: '数据备份', img: 'https://i.imgs.ovh/2026/11/12/fb4761d50fc0237e8566e4ed097f9920.jpg', color: '#6b6b6b', icon: 'M4 7h16v4H4zM6 11v8h12v-8M10 15h4',
     tap: function () { go('s-backup'); } },
   { name: '网易云音乐', img:'https://i.imgs.ovh/2026/11/12/bec70652b9dafca1319ae6c0186d3087.jpg', color: '#d43c33', icon: 'M9 18V5l11-2v13M9 18a3 3 0 1 1-6 0 3 3 0 0 1 6 0zM20 16a3 3 0 1 1-6 0 3 3 0 0 1 6 0z',
-    tap: function () { toast('网易云音乐（一起听歌）还在开发中'); } },
+    tap: function () { go('s-music'); } },
   { name: '看手机', img:'https://i.imgs.ovh/2026/11/12/79c9fc0024948a5505778c43d91a6bfd.jpg', color: '#2f6f8f', icon: 'M8 3h8a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H8a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1zM11 18h2M9.5 11.5C10.5 9.8 11.3 9.3 12 9.3s1.5.5 2.5 2.2c-1 1.7-1.8 2.2-2.5 2.2s-1.5-.5-2.5-2.2z',
     tap: function () { toast('看手机还在开发中'); } },
   { name: '预设', color: '#7a6aa8', icon: 'M6 3h9l4 4v14H6zM14 3v5h5M9 12h7M9 16h7',   /* 想换图标图片：在这里加 img:'图片网址' */
@@ -1985,7 +1987,7 @@ var PLUS_ITEMS = [
   ['语音', 'M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3zM6 11a6 6 0 0 0 12 0M12 17v4', function () { openVoiceRecorder(); }],
   ['系统录音机 / 音频文件', 'M3 12h2l2-6 3 12 3-9 2 3h6', function () { voiceFromFile(true); }],
   ['图片', 'M4 5h16v14H4zM4 16l5-5 4 4 3-3 4 4M9 9.5h.01', function () { openImagePicker(); }],
-  ['一起听（网易云）', 'M9 18V5l11-2v13M9 18a3 3 0 1 1-3-3 3 3 0 0 1 3 3zM20 16a3 3 0 1 1-3-3 3 3 0 0 1 3 3z', function () { toast('一起听歌（关联桌面「网易云音乐」）还在开发中'); }],
+  ['一起听（网易云）', 'M9 18V5l11-2v13M9 18a3 3 0 1 1-3-3 3 3 0 0 1 3 3zM20 16a3 3 0 1 1-3-3 3 3 0 0 1 3 3z', function () { muTogetherToggle(); }],
   ['看手机', 'M8 3h8a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H8a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1zM11 18h2', function () { toast('看手机（关联桌面「看手机」）还在开发中'); }]
 ];
 function closePlus() { $('plusmenu').hidden = true; $('b-plus').classList.remove('on'); }
@@ -2273,10 +2275,11 @@ async function buildPrompt(char) {
   }
   var wantThought = !!(char.autoThought && char.autoThought.enabled);
   var moCtx = char.momentsOn ? await buildMomentsContext(char) : null;
+  var muCtx = await muPromptCtx(char);   /* 一起听：只有绑定了这个角色才有 */
   var pool = stickerPool(await dbAll('stickers'), char.stickerCategoryIds);
   var shown = sampleStickers(pool, settings.stickerPromptLimit);
-  var system = buildSystem({ gap: gap, char: char, settings: settings, entries: entries, memories: mems, stickers: shown, thought: thought, preset: preset, wantThought: wantThought, momentsText: moCtx ? moCtx.text : '', voice: audioUsed ? 'audio' : hasVoice, dictate: dictIds.length, changes: changes, now: Date.now() });
-  return { system: system, messages: apiMsgs, pool: pool, wantThought: wantThought, momentIds: moCtx ? moCtx.ids : null, dictIds: dictIds, stats: { history: history.length, entries: entries.length, memories: mems.length, stickers: shown.length } };
+  var system = buildSystem({ gap: gap, char: char, settings: settings, entries: entries, memories: mems, stickers: shown, thought: thought, preset: preset, wantThought: wantThought, momentsText: moCtx ? moCtx.text : '', musicText: muCtx ? muPromptText(muCtx) : '', voice: audioUsed ? 'audio' : hasVoice, dictate: dictIds.length, changes: changes, now: Date.now() });
+  return { system: system, messages: apiMsgs, pool: pool, wantThought: wantThought, momentIds: moCtx ? moCtx.ids : null, musicOn: !!muCtx, dictIds: dictIds, stats: { history: history.length, entries: entries.length, memories: mems.length, stickers: shown.length } };
 }
 
 /* 点「等回复」= 发一次请求。按钮永远可点：后台慢时可以再点一次，
@@ -2315,7 +2318,8 @@ async function generateReply(fresh) {
     });
     if (!r.active || r.won) return;
     var dict = extractDictation(text);   /* 用户语音的文字也随回复一起回来，不另外请求 */
-    var mo = extractMoments(dict.reply);   /* 朋友圈互动也随回复一起回来 */
+    var mc = extractMusicCmd(dict.reply);   /* [CMD:…] 先抽掉，不显示 */
+    var mo = extractMoments(mc.reply);   /* 朋友圈互动也随回复一起回来 */
     var st = extractStatus(mo.reply);
     var ex = extractThought(st.reply), replyText = ex.reply;   /* 心声同理 */
     var items = char.offlineMode ? (replyText.trim() ? [{ type: 'offline', content: replyText.trim() }] : []) : parseReplyLines(splitReply(replyText, 12), prompt.pool, !!char.aiVoice), base = Date.now(), saved = [];
@@ -2332,6 +2336,7 @@ async function generateReply(fresh) {
     });
     await dbBulkPut('messages', saved);
     await applyDictation(prompt.dictIds, dict.texts);
+    if (prompt.musicOn && mc.cmds.length) { try { await muApplyCmds(char, mc.cmds); } catch (e) {} }
     if (prompt.momentIds) { try { await applyMoments(char, mo.data, prompt.momentIds); } catch (e) { toast('朋友圈互动没存上：' + e.message); } }
     if (prompt.wantThought) {
       if (ex.thought) { await dbPut('thoughts', { characterId: char.id, heartfeltVoice: ex.thought.heartfeltVoice, randomJottings: ex.thought.randomJottings, ts: Date.now() }); refreshThoughtCloud(); }
@@ -2872,6 +2877,7 @@ onShow['s-char'] = async function () {
     h('div', { class: 'hint', text: '只针对这个角色。导出的文件可以导入到同一个角色，或换设备后导回来。' })));
   body.appendChild(h('div', { class: 'btn-row' }, h('button', { class: 'btn danger', text: '删除这个角色', onclick: function () {
     confirmSheet('删除「' + c.name + '」及其全部聊天和记忆？', '删除', async function () {
+      try { await dbDel('playlists', 'pl-' + c.id); } catch (e) {} if (mu.together === c.id) muUnbind();
       var all = await pageMessages(c.id, null, 1e9), moAll = await dbAll('moments'), tx = db.transaction(['messages', 'memories', 'characters', 'moments'], 'readwrite');
       all.forEach(function (m) { tx.objectStore('messages').delete(m.id); });
       (await dbByIndex('memories', 'byChar', c.id)).forEach(function (m) { tx.objectStore('memories').delete(m.id); });
@@ -3722,6 +3728,7 @@ var PARTS = [
   { id: 'msgs', name: '聊天记录', stores: ['messages'] },
   { id: 'mems', name: '记忆', stores: ['memories'] },
   { id: 'thoughts', name: '心声', stores: ['thoughts'] },
+  { id: 'music', name: '音乐歌单', stores: ['playlists'], settings: ['musicApi', 'musicApiBackup'], hint: '我和每个角色的歌单，以及音乐接口地址' },
   { id: 'moments', name: '朋友圈', stores: ['moments'], settings: ['myProfile'], hint: '动态、点赞、评论，以及个人主页（头像、昵称、签名、背景）' },
   { id: 'wb', name: '世界书', stores: ['worldBooks', 'worldBookCategories'] },
   { id: 'stk', name: '表情包', stores: ['stickers', 'stickerCategories'] },
@@ -4045,6 +4052,366 @@ async function restoreBeauty() {
   await saveSettings(); applyTheme(); await renderHome();
 }
 $('b-beauty-save').onclick = function () { beautySnap = snapBeauty(); iosAlert('已保存', '美化设置已保存'); };
+
+/* ====================================================================
+ * 网易云音乐 / 一起听
+ * 三块：① 数据源（NeteaseCloudMusicApi 接口 + 本地歌单）② 本地播放状态机（单人听歌 / 双人一起听）③ 搭车聊天请求
+ *  · 网页不能直连网易云（跨域），要在「网易云音乐」页最下面填一个 NeteaseCloudMusicApi 接口地址（https）。
+ *  · 歌单存在 IndexedDB 的 playlists 表：每个人（我 / 每个角色）一份 { id:'pl-<owner>', owner, songs:[{id,name,artist,cover,dt}] }，不走网络。
+ *  · 全局只有一个 Audio。桌面「网易云音乐」= 单人后台听歌，不弹悬浮窗、不碰提示词；
+ *    聊天里点「＋ → 一起听」才绑定当前角色：弹双人头像悬浮窗，并在每次聊天请求里顺带带上「正在听什么、唱到哪句」，
+ *    角色想切歌就在回复末尾写 [CMD:NEXT_SONG] / [CMD:PLAY_SONG:歌名]，前端抓到后删掉标记并直接本地切歌。全程零额外请求。
+ * ==================================================================== */
+var mu = { audio: new Audio(), queue: [], idx: -1, song: null, owner: 'me', lrc: [], lrcI: -1, tk: 0, fail: 0, loading: false, together: null };
+mu.audio.preload = 'auto';
+var muOwner = 'me';
+
+function muBase() { return String(settings.musicApi || '').trim().replace(/\/+$/, ''); }
+function muBackup() { return String(settings.musicApiBackup || '').trim().replace(/\/+$/, ''); }
+function muFetch(base, path, params) {
+  var q = Object.keys(params || {}).map(function (k) { return encodeURIComponent(k) + '=' + encodeURIComponent(params[k]); }).join('&');
+  var url = base + path + '?' + (q ? q + '&' : '') + 'timestamp=' + Date.now();
+  var ctl = new AbortController(), tm = setTimeout(function () { ctl.abort(); }, 15000);
+  return fetch(url, { signal: ctl.signal }).then(function (r) {
+    clearTimeout(tm); if (!r.ok) throw new Error('接口返回 ' + r.status + '（' + path + '）'); return r.json();
+  }, function (e) {
+    clearTimeout(tm); throw new Error(e && e.name === 'AbortError' ? '接口超时，换个接口地址试试' : '连不上接口：地址写错、不是 https、或接口没开跨域');
+  });
+}
+function muNorm(s) {
+  var ar = s.ar || s.artists || [], al = s.al || s.album || {};
+  return { id: s.id, name: s.name || '', artist: ar.map(function (a) { return a.name; }).filter(Boolean).join('/'), cover: al.picUrl || al.blurPicUrl || '', dt: s.dt || s.duration || 0 };
+}
+async function muSearch(base, kw) {
+  var r = await muFetch(base, '/cloudsearch', { keywords: kw, limit: 20 }), l = (r.result && r.result.songs) || [];
+  if (!l.length) { try { r = await muFetch(base, '/search', { keywords: kw, limit: 20 }); l = (r.result && r.result.songs) || []; } catch (e) {} }
+  return l.map(muNorm);
+}
+/* 歌单链接 / ID → 全部歌曲（分页拉，最多 1000 首） */
+async function muImportPlaylist(txt) {
+  var m = String(txt).match(/(?:playlist\?id=|playlist\/|[?&]id=)(\d{3,})/) || String(txt).match(/^\s*(\d{3,})\s*$/);
+  if (!m) throw new Error('没认出歌单：请粘贴歌单链接，或只填歌单 ID（数字）');
+  var base = muBase(), all = [], off = 0;
+  for (;;) {
+    var r = await muFetch(base, '/playlist/track/all', { id: m[1], limit: 200, offset: off }), s = (r.songs || []).map(muNorm);
+    all = all.concat(s); if (s.length < 200 || all.length >= 1000) break; off += 200;
+  }
+  if (!all.length) { var d = await muFetch(base, '/playlist/detail', { id: m[1] }); all = ((d.playlist && d.playlist.tracks) || []).map(muNorm); }
+  if (!all.length) throw new Error('这个歌单里没拿到歌（可能是私密歌单，或接口不支持）');
+  return all;
+}
+/* 歌单（每人一份）读写 */
+async function muGetList(owner) { return (await dbGet('playlists', 'pl-' + owner)) || { id: 'pl-' + owner, owner: owner, songs: [] }; }
+async function muAdd(owner, songs) {
+  var pl = await muGetList(owner), have = {}; pl.songs.forEach(function (s) { have[s.id] = true; });
+  var add = songs.filter(function (s) { if (have[s.id]) return false; have[s.id] = true; return true; });
+  pl.songs = pl.songs.concat(add); await dbPut('playlists', pl); return add.length;
+}
+
+/* 拿播放直链：主接口 → （空 / 只有试听）备用音源按原 ID、再按「歌名+歌手」搜索替换 → 最后试官方外链 */
+async function muResolve(song) {
+  async function fromApi(base, id) {
+    try { var r = await muFetch(base, '/song/url/v1', { id: id, level: 'standard' }), d = r.data && r.data[0]; if (d && d.url && !d.freeTrialInfo) return d.url; } catch (e) {}
+    try { var r2 = await muFetch(base, '/song/url', { id: id }), d2 = r2.data && r2.data[0]; if (d2 && d2.url && !d2.freeTrialInfo) return d2.url; } catch (e) {}
+    return '';
+  }
+  var main = muBase(), bk = muBackup(), url = '';
+  if (main) url = await fromApi(main, song.id);
+  if (!url && bk) {
+    url = await fromApi(bk, song.id);
+    if (!url) { try { var rs = await muSearch(bk, (song.name + ' ' + song.artist).trim()); for (var i = 0; i < rs.length && i < 3 && !url; i++) url = await fromApi(bk, rs[i].id); } catch (e) {} }
+  }
+  if (!url) url = 'https://music.163.com/song/media/outer/url?id=' + song.id + '.mp3';
+  return url.replace(/^http:/, 'https:');
+}
+
+/* 歌词：[mm:ss.xx]文字 → [{t, text}] */
+function muParseLrc(txt) {
+  var out = [];
+  String(txt || '').split(/\r?\n/).forEach(function (ln) {
+    var re = /\[(\d+):(\d+)(?:[.:](\d+))?\]/g, m, ts = [], last = 0;
+    while ((m = re.exec(ln))) { ts.push(Number(m[1]) * 60 + Number(m[2]) + (m[3] ? Number('0.' + m[3]) : 0)); last = re.lastIndex; }
+    var text = ln.slice(last).trim();
+    if (ts.length && text) ts.forEach(function (t) { out.push({ t: t, text: text }); });
+  });
+  return out.sort(function (a, b) { return a.t - b.t; });
+}
+function muLineAt(t) { var k = -1; for (var i = 0; i < mu.lrc.length; i++) { if (mu.lrc[i].t <= t) k = i; else break; } return k; }
+async function muLoadLyric(song, tk) {
+  if (!muBase()) return;
+  try {
+    var r = await muFetch(muBase(), '/lyric', { id: song.id });
+    if (tk !== mu.tk) return;
+    mu.lrc = muParseLrc(r && r.lrc && r.lrc.lyric); mu.lrcI = -1; muBuildLrcPanel(); muTick();
+  } catch (e) {}
+}
+
+/* ---- 播放状态机 ---- */
+async function muPlayQueue(queue, idx, owner) { mu.queue = queue.slice(); mu.owner = owner || 'me'; return muPlayAt(idx); }
+async function muPlayAt(i) {
+  var s = mu.queue[i]; if (!s) return;
+  mu.idx = i; mu.song = s; mu.loading = true; mu.lrc = []; mu.lrcI = -1; var tk = ++mu.tk;
+  muBuildLrcPanel(); muUI();
+  try {
+    var url = await muResolve(s); if (tk !== mu.tk) return;
+    mu.audio.src = url; await mu.audio.play();
+  } catch (e) { if (tk === mu.tk && !(e && e.name === 'AbortError')) toast('这首放不了：' + s.name); }
+  if (tk !== mu.tk) return;
+  mu.loading = false; muLoadLyric(s, tk); muUI();
+}
+function muNext(dir) {
+  if (!mu.queue.length) return;
+  var n = mu.queue.length, i = (mu.idx + (dir || 1) + n) % n; muPlayAt(i);
+}
+function muToggle() {
+  if (!mu.song) return;
+  if (mu.audio.paused) mu.audio.play().catch(function () {}); else mu.audio.pause();
+}
+function muStop() { mu.tk++; mu.audio.pause(); mu.audio.removeAttribute('src'); mu.song = null; mu.queue = []; mu.idx = -1; mu.lrc = []; mu.together = null; muUI(); }
+mu.audio.addEventListener('ended', function () { muNext(1); });
+mu.audio.addEventListener('play', muUI); mu.audio.addEventListener('pause', muUI);
+mu.audio.addEventListener('playing', function () { mu.fail = 0; muUI(); });
+mu.audio.addEventListener('error', function () {
+  if (!mu.song || !mu.audio.getAttribute('src')) return;
+  toast('「' + mu.song.name + '」放不了（可能是 VIP / 没有版权；可在音乐库填备用音源）');
+  mu.fail++; if (mu.fail < 3 && mu.queue.length > 1) muNext(1);
+});
+mu.audio.addEventListener('timeupdate', muTick);
+function muTick() {
+  var t = mu.audio.currentTime || 0, k = muLineAt(t), d = mu.audio.duration;
+  var bar = document.querySelector('#music-mini .mm-bar i'); if (bar && d > 0) bar.style.width = Math.min(100, t / d * 100) + '%';
+  if (k !== mu.lrcI) { mu.lrcI = k; muLrcUI(); }
+}
+function muFmt(t) { t = Math.max(0, Math.floor(t || 0)); return Math.floor(t / 60) + ':' + ('0' + (t % 60)).slice(-2); }
+function muCurLine() { return mu.lrcI >= 0 && mu.lrc[mu.lrcI] ? mu.lrc[mu.lrcI].text : ''; }
+/* 系统通知栏 / 锁屏上的播放控制 */
+function muMedia() {
+  try {
+    if (!('mediaSession' in navigator)) return;
+    if (!mu.song) { navigator.mediaSession.metadata = null; return; }
+    navigator.mediaSession.metadata = new MediaMetadata({ title: mu.song.name, artist: mu.song.artist, artwork: mu.song.cover ? [{ src: mu.song.cover, sizes: '512x512' }] : [] });
+    navigator.mediaSession.setActionHandler('play', muToggle); navigator.mediaSession.setActionHandler('pause', muToggle);
+    navigator.mediaSession.setActionHandler('nexttrack', function () { muNext(1); }); navigator.mediaSession.setActionHandler('previoustrack', function () { muNext(-1); });
+  } catch (e) {}
+}
+
+/* ---- 界面同步：音乐页迷你播放条 + 聊天里的双人悬浮窗 ---- */
+function muCover(s, cls) {
+  var c = h('div', { class: cls || 'mu-cov' });
+  if (s && s.cover) c.appendChild(h('img', { src: s.cover + (s.cover.indexOf('?') < 0 ? '?param=96y96' : ''), alt: '' })); else c.textContent = '♪';
+  return c;
+}
+var muPlaySvg = '<svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>', muPauseSvg = '<svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><path d="M7 5h4v14H7zM13 5h4v14h-4z"/></svg>';
+var muNextSvg = '<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M6 5l9 7-9 7zM17 5h2v14h-2z"/></svg>', muPrevSvg = '<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M18 5l-9 7 9 7zM5 5h2v14H5z"/></svg>';
+function muBtn(svg, fn, cls) { var b = h('button', { type: 'button', class: 'mu-ic ' + (cls || ''), onclick: function (e) { e.stopPropagation(); fn(); } }); b.innerHTML = svg; return b; }
+function muUI() {
+  muMedia();
+  /* 音乐页底部迷你条 */
+  var mini = $('music-mini');
+  if (mini) {
+    mini.innerHTML = '';
+    if (mu.song) {
+      mini.hidden = false;
+      var playing = !mu.audio.paused;
+      mini.appendChild(h('div', { class: 'mm-bar' }, h('i')));
+      mini.appendChild(h('div', { class: 'mm-main' }, muCover(mu.song), h('div', { class: 'mu-info' }, h('div', { class: 'mu-name', text: mu.song.name }), h('div', { class: 'mu-sub', text: (mu.loading ? '加载中… ' : '') + mu.song.artist })),
+        muBtn(muPrevSvg, function () { muNext(-1); }), muBtn(playing ? muPauseSvg : muPlaySvg, muToggle, 'big'), muBtn(muNextSvg, function () { muNext(1); }),
+        h('button', { type: 'button', class: 'mu-ic', text: '✕', onclick: function () { muStop(); renderMusicKeep(); } })));
+      muTick();
+    } else mini.hidden = true;
+  }
+  refreshListenPop();
+  if ($('s-music') && $('s-music').classList.contains('active')) muMarkRows();
+}
+function muMarkRows() { document.querySelectorAll('#music-body .mu-row[data-sid]').forEach(function (r) { r.classList.toggle('on', !!mu.song && String(mu.song.id) === r.getAttribute('data-sid')); }); }
+
+/* 聊天里的「一起听」悬浮窗：双人头像呼吸灯 + 当前歌词，点开展开滚动歌词 */
+function ensureListenPop() {
+  var pop = $('listen-pop'); if (!pop || pop.firstChild) return pop;
+  pop.appendChild(h('div', { class: 'lp-pill', onclick: function () { pop.classList.toggle('open'); muLrcUI(); } },
+    h('div', { class: 'lp-avs', id: 'lp-avs' }), h('div', { class: 'lp-txt' }, h('div', { class: 'mu-name', id: 'lp-name' }), h('div', { class: 'mu-lrc', id: 'lp-line' })),
+    (function () { var b = muBtn(muPlaySvg, muToggle, 'lp-play'); b.id = 'lp-play'; return b; })()));
+  pop.appendChild(h('div', { class: 'lp-more' }, h('div', { class: 'lp-lrc', id: 'lp-lrc' }),
+    h('div', { class: 'lp-ctl' }, muBtn(muPrevSvg, function () { muNext(-1); }), muBtn(muNextSvg, function () { muNext(1); }),
+      h('button', { type: 'button', class: 'lp-end', text: '结束一起听', onclick: function (e) { e.stopPropagation(); muUnbind(true); } }))));
+  return pop;
+}
+function refreshListenPop() {
+  var pop = ensureListenPop(); if (!pop) return;
+  var on = !!(mu.together && cur && mu.together === cur.id && mu.song);
+  pop.classList.toggle('on', on); if (!on) { pop.classList.remove('open'); return; }
+  var playing = !mu.audio.paused; pop.classList.toggle('paused', !playing);
+  var avs = $('lp-avs'); avs.innerHTML = '';
+  avs.appendChild(avatarNode(cur.userAvatar || myProfile().avatar, myProfile().name)); avs.appendChild(avatarNode(cur.avatar, cur.name));
+  $('lp-name').textContent = mu.song.name + ' · ' + mu.song.artist;
+  $('lp-play').innerHTML = playing ? muPauseSvg : muPlaySvg;
+  muLrcUI();
+}
+function muBuildLrcPanel() {
+  var box = $('lp-lrc'); if (!box) return; box.innerHTML = '';
+  if (!mu.lrc.length) { box.appendChild(h('div', { class: 'lp-l none', text: muBase() ? '暂无歌词' : '（没配接口，拿不到歌词）' })); return; }
+  mu.lrc.forEach(function (l, i) { box.appendChild(h('div', { class: 'lp-l', 'data-i': String(i), text: l.text })); });
+}
+function muLrcUI() {
+  var ln = $('lp-line'); if (ln) ln.textContent = muCurLine() || (mu.loading ? '加载中…' : '♪');
+  var box = $('lp-lrc'); if (!box) return;
+  var old = box.querySelector('.lp-l.on'); if (old) old.classList.remove('on');
+  var el = mu.lrcI >= 0 ? box.querySelector('.lp-l[data-i="' + mu.lrcI + '"]') : null;
+  if (el) { el.classList.add('on'); if ($('listen-pop').classList.contains('open')) box.scrollTop = el.offsetTop - box.clientHeight / 2 + el.clientHeight / 2; }
+}
+function muUnbind(msg) { mu.together = null; refreshListenPop(); if (msg) toast('已结束一起听（音乐还在后台放，可去「网易云音乐」关掉）'); }
+
+/* 聊天「＋ → 一起听」：没绑定就绑定当前角色；已绑定就结束 */
+async function muTogetherToggle() {
+  if (!cur) return;
+  if (mu.together === cur.id) { muUnbind(true); return; }
+  if (mu.song) { mu.together = cur.id; refreshListenPop(); toast('开始和 ' + cur.name + ' 一起听《' + mu.song.name + '》'); return; }
+  if (!muBase()) { iosAlert('还没配接口', '先去桌面「网易云音乐」最下面填接口地址、导入歌单'); return; }
+  var mine = await muGetList('me'), his = await muGetList(cur.id), ch = cur;
+  function start(list, owner) {
+    if (!list.songs.length) { toast('这个歌单还是空的，先去「网易云音乐」添加歌'); return; }
+    mu.together = ch.id; muPlayQueue(list.songs, 0, owner); toast('开始和 ' + ch.name + ' 一起听');
+  }
+  openBottomSheet([h('h3', { text: '和 ' + ch.name + ' 一起听，从哪个歌单开始？' }),
+    h('button', { class: 'menu-btn', text: '我的歌单（' + mine.songs.length + ' 首）', onclick: function () { closeSheet(); start(mine, 'me'); } }),
+    h('button', { class: 'menu-btn', text: ch.name + ' 的歌单（' + his.songs.length + ' 首）', onclick: function () { closeSheet(); start(his, ch.id); } }),
+    h('button', { class: 'menu-btn', text: '去音乐库选歌', onclick: function () { closeSheet(); go('s-music'); } })]);
+}
+
+/* ---- 搭车聊天请求：提示词里带上「正在听什么」，回复里抓 [CMD:…] ---- */
+async function muPromptCtx(char) {
+  if (!mu.together || mu.together !== char.id || !mu.song) return null;
+  var pl = await muGetList(char.id);
+  return { song: mu.song.name, artist: mu.song.artist, line: muCurLine(), playing: !mu.audio.paused, mine: pl.songs.slice(0, 15).map(function (s) { return s.name; }) };
+}
+function muPromptText(m) {
+  var t = '# 一起听歌\n你和用户正在一起听歌（两边同步播放）：当前《' + m.song + '》' + (m.artist ? ' - ' + m.artist : '') + '，' + (m.playing ? '正在播放' : '已暂停') + (m.line ? '，刚唱到「' + m.line + '」' : '') + '。\n像真人一起听歌那样自然地偶尔聊到这首歌或歌词，不用每条都提，也不要复述这段提示。\n想切到下一首时，在回复最末尾单独写一行 [CMD:NEXT_SONG]；';
+  if (m.mine.length) t += '想换成你自己喜欢的某首歌，写 [CMD:PLAY_SONG:歌名]（歌名只能从你的歌单里选：' + m.mine.join('、') + '）；';
+  return t + '这些指令只给手机程序看，用户看不到，正文里不要提到，也不要频繁切歌。';
+}
+function extractMusicCmd(text) {
+  var t = String(text || ''), cmds = [];
+  t = t.replace(/\[CMD:\s*NEXT_SONG\s*\]/gi, function () { cmds.push({ t: 'next' }); return ''; });
+  t = t.replace(/\[CMD:\s*PLAY_SONG\s*:\s*([^\]]+?)\s*\]/gi, function (_, n) { cmds.push({ t: 'play', name: n }); return ''; });
+  return { reply: t.trim(), cmds: cmds };
+}
+async function muApplyCmds(char, cmds) {
+  for (var i = 0; i < cmds.length; i++) {
+    var c = cmds[i];
+    if (c.t === 'next') { muNext(1); toast(char.name + ' 切到了下一首'); }
+    else if (c.t === 'play') {
+      var lists = [{ o: char.id, l: await muGetList(char.id) }, { o: 'me', l: await muGetList('me') }], hit = null;
+      for (var j = 0; j < lists.length && !hit; j++) {
+        var ss = lists[j].l.songs, k = ss.findIndex(function (s) { return s.name === c.name; });
+        if (k < 0) k = ss.findIndex(function (s) { return s.name.indexOf(c.name) !== -1 || c.name.indexOf(s.name) !== -1; });
+        if (k >= 0) hit = { q: ss, k: k, o: lists[j].o };
+      }
+      if (hit) { muPlayQueue(hit.q, hit.k, hit.o); toast(char.name + ' 换了一首：' + hit.q[hit.k].name); }
+    }
+  }
+}
+
+/* ---- 桌面「网易云音乐」：私人播放器 / 音乐库配置中心 ---- */
+var muResults = null, muImpTxt = '', muKw = '';
+function renderMusicKeep() { if ($('s-music').classList.contains('active')) renderMusic(); }
+async function muOwners() {
+  var cs = await dbAll('characters'), p = myProfile();
+  return [{ id: 'me', name: p.name || '我', avatar: p.avatar }].concat(cs.map(function (c) { return { id: c.id, name: c.name, avatar: c.avatar }; }));
+}
+function muRow(s, play, right) {
+  var row = h('div', { class: 'mu-row' + (mu.song && mu.song.id === s.id ? ' on' : ''), 'data-sid': String(s.id) }, muCover(s), h('div', { class: 'mu-info' }, h('div', { class: 'mu-name', text: s.name }), h('div', { class: 'mu-sub', text: s.artist })), right);
+  row.addEventListener('click', function (e) { if (e.target.closest('.mu-act')) return; play(); });
+  return row;
+}
+async function renderMusic() {
+  var body = $('music-body'), top = $('s-music').querySelector('.scroll').scrollTop;
+  var owners = await muOwners(); if (!owners.some(function (o) { return o.id === muOwner; })) muOwner = 'me';
+  var cur0 = owners.find(function (o) { return o.id === muOwner; }), pl = await muGetList(muOwner);
+  body.innerHTML = '';
+  if (!muBase()) {
+    var tip = h('div', { class: 'mu-tip', text: '还没配接口。网页不能直接访问网易云（跨域），需要一个 NeteaseCloudMusicApi 接口地址（https 开头）——可以自己部署（Vercel 等免费平台），或用别人提供的。填在本页最下面「接口设置」里。' }); body.appendChild(tip);
+  }
+  var chips = h('div', { class: 'mu-owners' });
+  owners.forEach(function (o) {
+    var b = h('button', { type: 'button', class: 'mu-chip' + (o.id === muOwner ? ' on' : ''), onclick: function () { muOwner = o.id; muResults = null; renderMusic(); } }, avatarNode(o.avatar, o.name), h('span', { text: o.name }));
+    chips.appendChild(b);
+  });
+  body.appendChild(h('div', { class: 'group-title', text: '歌单主页（点头像切换：我 / 每个角色各一份）' })); body.appendChild(chips);
+  /* 导入 + 搜索 */
+  var imp = h('input', { type: 'text', placeholder: '粘贴歌单链接或歌单 ID', value: muImpTxt }), kw = h('input', { type: 'text', placeholder: '搜歌名 / 歌手', value: muKw });
+  imp.addEventListener('input', function () { muImpTxt = imp.value; }); kw.addEventListener('input', function () { muKw = kw.value; });
+  var resBox = h('div', {});
+  async function doImport() {
+    if (!muBase()) { toast('先在最下面填接口地址'); return; }
+    if (!imp.value.trim()) { toast('先粘贴歌单链接或 ID'); return; }
+    toast('正在导入…');
+    try { var songs = await muImportPlaylist(imp.value), n = await muAdd(muOwner, songs); muImpTxt = ''; iosAlert('导入完成', '「' + cur0.name + '」的歌单新增 ' + n + ' 首（歌单共 ' + songs.length + ' 首）'); renderMusic(); }
+    catch (e) { showError(e, { label: '导入失败' }); }
+  }
+  async function doSearch() {
+    if (!muBase()) { toast('先在最下面填接口地址'); return; }
+    var k = kw.value.trim(); if (!k) return;
+    toast('搜索中…');
+    try { muResults = await muSearch(muBase(), k); drawResults(); } catch (e) { showError(e, { label: '搜索失败' }); }
+  }
+  function drawResults() {
+    resBox.innerHTML = ''; if (!muResults) return;
+    resBox.appendChild(h('div', { class: 'group-title', text: '搜索结果（点歌试听，点＋加进「' + cur0.name + '」的歌单）' }));
+    if (!muResults.length) { resBox.appendChild(h('div', { class: 'mu-tip', text: '没搜到' })); return; }
+    var card = h('div', { class: 'mu-list' });
+    muResults.forEach(function (s, i) {
+      card.appendChild(muRow(s, function () { muPlayQueue(muResults, i, 'search'); }, h('button', { type: 'button', class: 'mu-act mu-ic', text: '＋', onclick: async function () { var n = await muAdd(muOwner, [s]); toast(n ? '已加入「' + cur0.name + '」的歌单' : '歌单里已经有了'); renderMusic(); } })));
+    });
+    resBox.appendChild(card);
+  }
+  body.appendChild(h('div', { class: 'group' },
+    h('div', { class: 'field mu-line' }, imp, h('button', { type: 'button', class: 'btn', text: '导入', onclick: doImport })),
+    h('div', { class: 'field mu-line' }, kw, h('button', { type: 'button', class: 'btn', text: '搜索', onclick: doSearch }))));
+  kw.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); doSearch(); } });
+  body.appendChild(resBox); drawResults();
+  /* 当前歌单 */
+  body.appendChild(h('div', { class: 'group-title', text: cur0.name + ' 的歌单 · ' + pl.songs.length + ' 首' }));
+  if (!pl.songs.length) body.appendChild(h('div', { class: 'mu-tip', text: '还是空的：上面导入网易云歌单，或搜歌添加。' + (muOwner === 'me' ? '' : '角色的歌单就是 TA 喜欢的歌——一起听时 TA 可以从里面挑歌来切。') }));
+  else {
+    var list = h('div', { class: 'mu-list' });
+    pl.songs.forEach(function (s, i) {
+      list.appendChild(muRow(s, function () { muPlayQueue(pl.songs, i, muOwner); }, h('button', { type: 'button', class: 'mu-act mu-ic', text: '⋯', onclick: function () {
+        menuSheet(s.name, [
+          ['播放', function () { muPlayQueue(pl.songs, i, muOwner); }],
+          ['加到别人的歌单…', function () {
+            menuSheet('加到谁的歌单', owners.filter(function (o) { return o.id !== muOwner; }).map(function (o) { return [o.name, async function () { var n = await muAdd(o.id, [s]); toast(n ? '已加到「' + o.name + '」的歌单' : '「' + o.name + '」的歌单里已经有了'); }]; }));
+          }],
+          ['从这个歌单删除', async function () { pl.songs.splice(i, 1); await dbPut('playlists', pl); renderMusic(); }]
+        ]);
+      } })));
+    });
+    body.appendChild(list);
+    body.appendChild(h('div', { class: 'btn-row', style: 'margin-top:10px' }, h('button', { class: 'btn', text: '顺序播放全部', onclick: function () { muPlayQueue(pl.songs, 0, muOwner); } }),
+      h('button', { class: 'btn danger', text: '清空这个歌单', onclick: function () { confirmSheet('清空「' + cur0.name + '」的歌单？', '清空', async function () { pl.songs = []; await dbPut('playlists', pl); renderMusic(); }, true); } })));
+  }
+  /* 接口设置 */
+  var api = h('input', { type: 'text', placeholder: 'https://你的接口地址（不要带结尾的 /）', value: settings.musicApi || '' }), bk = h('input', { type: 'text', placeholder: '备用音源接口地址（可留空）', value: settings.musicApiBackup || '' });
+  function saveApi() {
+    settings.musicApi = api.value.trim().replace(/\/+$/, ''); settings.musicApiBackup = bk.value.trim().replace(/\/+$/, ''); saveSettings();
+    if (location.protocol === 'https:' && /^http:/i.test(settings.musicApi + ' ' + settings.musicApiBackup)) toast('网页是 https，接口地址也要 https，否则会被浏览器拦');
+  }
+  api.addEventListener('change', function () { saveApi(); renderMusic(); }); bk.addEventListener('change', saveApi);
+  body.appendChild(h('div', { class: 'group-title', text: '接口设置' }));
+  body.appendChild(h('div', { class: 'group' }, field('主接口（NeteaseCloudMusicApi）', api, '用来搜歌、导入歌单、取歌词和播放直链'),
+    field('备用音源', bk, '主接口拿不到完整音频（VIP / 只有试听）时，自动到这里用「歌名+歌手」搜索，换一个能放的版本；接口格式同 NeteaseCloudMusicApi'),
+    h('div', { class: 'field' }, h('button', { type: 'button', class: 'btn', text: '测试主接口', onclick: async function () {
+      saveApi(); if (!muBase()) { toast('先填接口地址'); return; }
+      try { var r = await muSearch(muBase(), '周杰伦'); iosAlert(r.length ? '连接正常' : '连上了', r.length ? '搜到 ' + r.length + ' 首歌' : '接口有响应，但没搜到结果'); } catch (e) { showError(e, { label: '测试失败' }); }
+    } }))));
+  body.appendChild(h('div', { class: 'hint', style: 'color:var(--sub);font-size:12px;line-height:1.7;padding:0 4px 12px', text: '这里是你自己的私人播放器：点歌就在后台播放，不会弹出双人悬浮窗，也不会把歌名告诉角色。想和 TA 一起听，去和 TA 的聊天里点「＋ → 一起听」。' }));
+  $('s-music').querySelector('.scroll').scrollTop = top;
+}
+onShow['s-music'] = renderMusic;
+muUI();
+
+/* 打开聊天后刷新一起听悬浮窗（只有绑定的就是这个角色才显示） */
+var _openChatBase = openChat;
+openChat = async function () { var r = await _openChatBase.apply(this, arguments); refreshListenPop(); return r; };
 
 /* ---------- iOS 风格居中弹窗 ---------- */
 function iosAlert(title, msg) {
