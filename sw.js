@@ -1,6 +1,6 @@
 // 小手机 Service Worker：网络优先，离线时才用缓存（更新文件后下次打开就是新版）。
 // 另外负责：点系统通知 → 切到（或重新打开）对应角色的聊天页。
-const CACHE = 'myphone-v4';
+const CACHE = 'myphone-v5';
 const FILES = ['./', './index.html', './style.css', './app.js'];
 self.addEventListener('install', e => {
   self.skipWaiting();

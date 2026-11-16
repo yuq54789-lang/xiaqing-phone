@@ -5,7 +5,7 @@
  * ===================================================================== */
 
 /* ---------- ① 数据库（原生 IndexedDB，无需外部库） ---------- */
-var DB_NAME = 'myphone', DB_VER = 4, db = null;
+var DB_NAME = 'myphone', DB_VER = 5, db = null;
 var STORES = {
   characters: { keyPath: 'id' },
   messages: { keyPath: 'id', index: [['byChar', ['characterId', 'ts', 'id']]] },
@@ -19,6 +19,7 @@ var STORES = {
   miniPresets: { keyPath: 'id' },      /* 小预设：字体 / 提示音 / 美化 CSS / 气泡 CSS，每项单独存 */
   stickers: { keyPath: 'id' },
   stickerCategories: { keyPath: 'id' },
+  moments: { keyPath: 'id' },          /* 朋友圈动态（含点赞、评论） */
   settings: { keyPath: 'key' }
 };
 
@@ -100,11 +101,13 @@ function offlineRules(c, preset) {
 }
 /* 心声并入回复：不另外请求，让模型在同一次回复末尾顺带写 */
 var THOUGHT_RULES = '写完回复正文后，另起一行，写下你此刻的内心，严格按下面格式，只写一次，放在整个回复的最末尾：\n<心声>{"heartfeltVoice":"…","randomJottings":"…"}</心声>\nheartfeltVoice：一句话，你心里没有说出口的真实想法，不超过 40 字；randomJottings：一小段随笔，像日记或碎碎念，记录此刻的心情或刚发生的小事，不超过 120 字。语气必须符合角色设定。这一段只给用户在「心声」页看，不是聊天内容，正文里不要提到它。';
+/* 朋友圈并入回复：角色的动态 / 点赞 / 评论不另外请求，跟着正常回复一起输出 */
+var MOMENT_RULES = '你和用户互为朋友圈好友。上面是最近的动态（方括号里是动态 id）。写完回复正文后，如果想在朋友圈互动，另起一行写，严格按下面格式，只写一次：\n<朋友圈>{"post":"","likes":[],"comments":[]}</朋友圈>\npost：你想发的新动态（口语、像真人发朋友圈、符合角色，不超过 100 字），不想发就留空；不要频繁发，最近发过就留空。likes：想点赞的动态 id 列表。comments：[{"id":"动态id","text":"评论内容","reply":"想回复的人的名字，可省略"}]。用户新发的动态、标着（新）的评论，要自然地回应，但不必每条都评论。完全没有互动就整段不写。这一段是在朋友圈页面显示的，不是聊天内容，正文里不要提到它。';
 var DEFAULTS = {
   baseUrl: '', apiKey: '', model: '', temperature: 0.8,
   stream: false, themeId: 'default', customCss: '', homeBg: '', fontUrl: '', fontData: '', fontName: '',
   secBaseUrl: '', secApiKey: '', secModel: '',
-  scanDepth: 5, worldBookMaxChars: 6000, memoryLimit: 20, summaryMax: 200, defaultContext: 30, stickerPromptLimit: 60, autoReply: false, apiPresets: [], activePresetId: null, weather: null, homeLayout: null,
+  scanDepth: 5, worldBookMaxChars: 6000, memoryLimit: 20, summaryMax: 200, defaultContext: 30, stickerPromptLimit: 60, autoReply: false, myProfile: null, apiPresets: [], activePresetId: null, weather: null, homeLayout: null,
   bubbleSlow: 1,                 /* 气泡出现速度倍数：1=默认，越大越慢 */
   notifyUrl: '', notifyName: '', /* 消息提示音（网址 / 上传的文件名） */
   clockLayout: 'h', clockColor: '', dateColor: '', wxColor: '', clockDy: 0, dateDy: 0, wxDy: 0, clockDx: 0, dateDx: 0, wxDx: 0,   /* 时钟：横/竖排、三处文字颜色、三处上下及左右位置（互不绑定） */
@@ -238,6 +241,7 @@ function buildSystem(ctx) {
   }
   L.push('# 回复要求\n' + (c.offlineMode ? offlineRules(c, ctx.preset) : OUTPUT_RULES));
   if (ctx.wantThought) L.push('# 心声（附加输出）\n' + THOUGHT_RULES);
+  if (ctx.momentsText) L.push(ctx.momentsText + '\n\n# 朋友圈（附加输出）\n' + MOMENT_RULES);
   if (ctx.changes) L.push('# 消息的变动\n用户有时会撤回、删除或编辑消息。方括号里的「[用户撤回了一条消息。撤回前的内容：…]」「[用户删除了…]」和消息后面的「（…原文是…）」就是你看到的变动，你确实知道原来写了什么。像真人一样自然地反应（好奇、调侃、装作没看见都行，看角色性格），不要机械复述这些提示，也不要每次都点破。');
   if (c.aiVoice && !c.offlineMode) L.push('# 发语音\n想发语音消息时，把那一条单独写成一行：[语音：说的话]。方括号里就是语音里说的原话（口语、带语气词），会自动显示成文字，不用再重复。偶尔用，适合轻声说话、撒娇、叹气、情绪起伏的时候；每次回复最多 1 条。');
   if (ctx.dictate) L.push('# 听写（必须）\n用户发来的 ' + ctx.dictate + ' 条语音还没有文字。请在回复的最最开头，按语音出现的顺序，每条语音写一段 <听写>用户语音里说的原话</听写>（逐字写，不翻译、不润色；完全听不清就写 听不清）。写完标签再正常回复；标签里的字不要在正文里重复，标签本身用户看不到。');
@@ -569,8 +573,16 @@ function extractThought(text) {
   return { reply: reply.trim(), thought: th };
 }
 
+/* 从模型回复里拆出 <朋友圈>{…}</朋友圈>：返回 { reply, data }，解析失败 data=null */
+function extractMoments(text) {
+  var t = String(text || ''), m = t.match(/<朋友圈>([\s\S]*?)<\/朋友圈>/), data = null;
+  if (!m) { var i = t.indexOf('<朋友圈>'); return { reply: (i === -1 ? t : t.slice(0, i)).trim(), data: null }; }
+  try { var j = m[1].match(/\{[\s\S]*\}/); data = j ? JSON.parse(j[0]) : null; } catch (e) { data = null; }
+  return { reply: t.replace(m[0], '').trim(), data: data };
+}
+
 /* 导出给测试用 */
-if (typeof module !== 'undefined') module.exports = { extractThought: extractThought, offlineRules: offlineRules, selectMemories: selectMemories, triggeredEntries: triggeredEntries, pickMemories: pickMemories, buildSystem: buildSystem, msgToText: msgToText, toApiMessages: toApiMessages, splitReply: splitReply, parseThought: parseThought, openaiUrl: openaiUrl, stickerPool: stickerPool, sampleStickers: sampleStickers, parseReplyLines: parseReplyLines, findSticker: findSticker };
+if (typeof module !== 'undefined') module.exports = { extractMoments: extractMoments, extractThought: extractThought, offlineRules: offlineRules, selectMemories: selectMemories, triggeredEntries: triggeredEntries, pickMemories: pickMemories, buildSystem: buildSystem, msgToText: msgToText, toApiMessages: toApiMessages, splitReply: splitReply, parseThought: parseThought, openaiUrl: openaiUrl, stickerPool: stickerPool, sampleStickers: sampleStickers, parseReplyLines: parseReplyLines, findSticker: findSticker };
 
 /* ---------- ⑤ 界面 ---------- */
 var $ = function (id) { return document.getElementById(id); };
@@ -583,7 +595,7 @@ var UI_LANGS = [['zh', '简体中文'], ['zh-TW', '繁體中文'], ['en', 'Engli
 var uiLang = 'zh', uiDict = null;
 try { uiLang = localStorage.getItem('mp-lang') || 'zh'; if (uiLang !== 'zh') uiDict = JSON.parse(localStorage.getItem('mp-i18n-' + uiLang) || 'null'); if (!uiDict) uiLang = 'zh'; } catch (e) { uiLang = 'zh'; uiDict = null; }
 function T(s) { return (uiDict && typeof s === 'string' && uiDict[s]) || s; }
-var T_SKIP = /\b(bubble|last|msg|quote|trans|cl-voice|cl-jot|stk-name|name-edit)\b/;
+var T_SKIP = /\b(bubble|last|msg|quote|trans|cl-voice|cl-jot|stk-name|name-edit|mo-text|mo-name|mo-cm|mo-likes|mo-sign)\b/;
 function applyStaticI18n() {
   if (!uiDict) return;
   document.documentElement.lang = uiLang === 'zh-TW' ? 'zh-TW' : uiLang;
@@ -616,7 +628,7 @@ async function buildLangPack(lang, onProgress) {
 async function switchUiLang(lang) {
   if (lang === 'zh') { try { localStorage.setItem('mp-lang', 'zh'); } catch (e) {} location.reload(); return; }
   var box = h('div', { class: 'hint', text: '正在准备语言包…' });
-  openSheet([h('h3', { text: '切换语言' }), box]);
+  openBottomSheet([h('h3', { text: '切换语言' }), box]);
   trBrowserBad = trBrowserBad || false;
   var r = await buildLangPack(lang, function (a, b) { box.textContent = '正在准备语言包… ' + a + ' / ' + b; });
   var got = Object.keys(r.dict).length;
@@ -653,20 +665,25 @@ function toast(msg) {
 }
 
 /* 弹层 */
-function openSheet(nodes) {
+/* 弹层：默认是页面正中的 iOS 风格弹窗（确认 / 删除 / 保存 / 输入）；菜单、选择器、列表用 openBottomSheet，从底部升起 */
+function openSheet(nodes, bottom) {
   var p = $('sheet-panel'); p.innerHTML = '';
   nodes.forEach(function (n) { if (n) p.appendChild(n); });
+  $('sheet').classList.toggle('bottom', !!bottom);
   $('sheet').hidden = false;
+  p.scrollTop = 0;
 }
+function openBottomSheet(nodes) { openSheet(nodes, true); }
 function closeSheet() { $('sheet').hidden = true; }
 $('sheet').addEventListener('click', function (e) { if (e.target === $('sheet')) closeSheet(); });
 function menuSheet(title, items) {
-  openSheet([title ? h('h3', { text: title }) : null].concat(items.map(function (it) {
+  openBottomSheet([title ? h('h3', { text: title }) : null].concat(items.map(function (it) {
     return h('button', { class: 'menu-btn', text: it[0], onclick: function () { closeSheet(); it[1](); } });
   })).filter(Boolean));
 }
 function confirmSheet(msg, okText, onOk, danger) {
-  openSheet([h('h3', { text: msg }), h('div', { class: 'btn-row' },
+  var lines = String(msg).split('\n'), title = lines.shift(), rest = lines.join('\n').replace(/^\s*[（(]|[）)]\s*$/g, '');
+  openSheet([h('h3', { text: title }), rest ? h('div', { class: 'ia-m', text: rest }) : null, h('div', { class: 'btn-row' },
     h('button', { class: 'btn' + (danger ? ' danger' : ' primary'), text: okText, onclick: function () { closeSheet(); onOk(); } }),
     h('button', { class: 'btn', text: '取消', onclick: closeSheet }))]);
 }
@@ -785,7 +802,7 @@ function multiPick(title, options, selected, emptyText) {
       cnt.textContent = '已选 ' + Object.keys(tmp).length + ' / ' + options.length;
     }
     q.oninput = drawList; drawList();
-    openSheet([h('h3', { text: title }), options.length > 8 ? q : null, list,
+    openBottomSheet([h('h3', { text: title }), options.length > 8 ? q : null, list,
       h('div', { class: 'mp-foot' }, cnt,
         h('button', { type: 'button', class: 'btn', text: '全选', onclick: function () { options.forEach(function (o) { tmp[String(o.id)] = true; }); drawList(); } }),
         h('button', { type: 'button', class: 'btn', text: '全不选', onclick: function () { tmp = {}; drawList(); } }),
@@ -1104,7 +1121,7 @@ async function renderList() {
 }
 onShow['s-list'] = renderList;
 
-/* ---------- 聊天列表底部三个标签：聊天 / 朋友圈 / 个人主页（朋友圈、个人主页先是空框架） ---------- */
+/* ---------- 聊天列表底部三个标签：聊天 / 朋友圈 / 个人主页 ---------- */
 var LTABS = [
   ['s-list', '聊天', 'M4 5h16a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H10l-4 3v-3H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1z'],
   ['s-moments', '朋友圈', 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM12 3v18M3 12h18M5.6 6.5C8 8.5 16 8.5 18.4 6.5M5.6 17.5c2.4-2 10.4-2 12.8 0'],
@@ -1117,6 +1134,7 @@ function mountTabs() {
     LTABS.forEach(function (u, i) {
       var b = h('button', { type: 'button', class: 'lt' + (u[0] === t[0] ? ' on' : ''), onclick: function () { switchTab(u[0]); } });
       b.innerHTML = '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="' + u[2] + '"/></svg><span>' + u[1] + '</span>';
+      if (u[0] === 's-moments') { b.classList.add('lt-m'); b.appendChild(h('i', { class: 'mdot', hidden: true })); }
       bar.appendChild(b);
     });
     scr.appendChild(bar);
@@ -1128,19 +1146,222 @@ function switchTab(id) {
   if (ia < 0) return;
   nav[nav.length - 1] = id; activate(id, ib < ia);
 }
-onShow['s-moments'] = function () {
-  var b = $('moments-body'); if (b.firstChild) return;
-  b.appendChild(h('div', { class: 'sk-card' }, h('div', { class: 'sk-line w40' }), h('div', { class: 'sk-line' }), h('div', { class: 'sk-line w70' }), h('div', { class: 'sk-img' })));
-  b.appendChild(h('div', { class: 'sk-card' }, h('div', { class: 'sk-line w40' }), h('div', { class: 'sk-line w70' }), h('div', { class: 'sk-img' })));
-  b.appendChild(h('div', { class: 'empty', text: '朋友圈还在开发中' }));
-};
-onShow['s-me'] = function () {
-  var b = $('me-body'); b.innerHTML = '';
-  var av = h('div', { class: 'sk-av' });
-  b.appendChild(h('div', { class: 'sk-me' }, av, h('div', { class: 'sk-line w40' }), h('div', { class: 'sk-line w70' })));
-  b.appendChild(h('div', { class: 'sk-card' }, h('div', { class: 'sk-line' }), h('div', { class: 'sk-line w70' })));
-  b.appendChild(h('div', { class: 'empty', text: '个人主页还在开发中' }));
-};
+/* ====================================================================
+ * 朋友圈 / 个人主页
+ * 动态存在 moments 表：{ id, authorId('me' 或角色 id), content, images[], ts, likes[authorId],
+ *   comments[{ id, authorId, text, ts, replyTo }], seen{ 角色id: 该角色已看到的评论数 } }
+ * 角色的动态 / 点赞 / 评论不单独发请求：在角色设置里开了「朋友圈」的角色，每次正常回复时
+ * 提示词里带上最近动态，模型在回复末尾顺带写一段 <朋友圈>{…}</朋友圈>，由 applyMoments 落库。
+ * ==================================================================== */
+function myProfile() { return Object.assign({ name: '我', avatar: null, bg: '', sign: '' }, settings.myProfile || {}); }
+function saveProfile(patch) { settings.myProfile = Object.assign({}, settings.myProfile || {}, patch); return saveSettings(); }
+function agoText(ts) {
+  var s = (Date.now() - ts) / 1000;
+  if (s < 60) return '刚刚'; if (s < 3600) return Math.floor(s / 60) + ' 分钟前'; if (s < 86400) return Math.floor(s / 3600) + ' 小时前'; if (s < 172800) return '昨天';
+  var d = new Date(ts); return (d.getMonth() + 1) + ' 月 ' + d.getDate() + ' 日';
+}
+var momChars = {};   /* 角色 id → 角色，渲染时刷新 */
+function momentAuthor(id) {
+  if (id === 'me') { var p = myProfile(); return { name: p.name || '我', avatar: p.avatar }; }
+  var c = momChars[id]; return c ? { name: c.name, avatar: c.avatar } : { name: '已删除的角色', avatar: null };
+}
+async function loadMomChars() { momChars = {}; (await dbAll('characters')).forEach(function (c) { momChars[c.id] = c; }); }
+
+/* 一条动态。m 就地修改后存库、整张卡片原地重画（不丢滚动位置）。onGone：被删除后的回调 */
+function momentCard(m, onGone) {
+  var a = momentAuthor(m.authorId), card = h('div', { class: 'mo-item' }), main = h('div', { class: 'mo-main' });
+  m.likes = m.likes || []; m.comments = m.comments || [];
+  function save() { return dbPut('moments', m).then(function () { card.replaceWith(momentCard(m, onGone)); }); }
+  main.appendChild(h('div', { class: 'mo-name', text: a.name }));
+  if (m.content) main.appendChild(h('div', { class: 'mo-text', text: m.content }));
+  if (m.images && m.images.length) {
+    var g = h('div', { class: 'mo-imgs n' + (m.images.length === 1 ? 1 : m.images.length === 4 ? 4 : 3) });
+    m.images.forEach(function (src) { g.appendChild(h('img', { src: src, alt: '', onclick: function () { openLightbox(src); } })); });
+    main.appendChild(g);
+  }
+  var liked = m.likes.indexOf('me') !== -1;
+  var more = h('button', { type: 'button', class: 'mo-more', text: '⋯', 'aria-label': '更多', onclick: function () {
+    menuSheet(null, [
+      [liked ? '取消赞' : '赞', function () { if (liked) m.likes = m.likes.filter(function (x) { return x !== 'me'; }); else m.likes.push('me'); save(); }],
+      ['评论', function () { commentSheet(m, null, save); }],
+      ['删除这条动态', function () { confirmSheet('删除这条动态？', '删除', async function () { await dbDel('moments', m.id); card.remove(); if (onGone) onGone(); updateMomentsDot(); }, true); }]
+    ]);
+  } });
+  main.appendChild(h('div', { class: 'mo-foot' }, h('span', { text: agoText(m.ts) }), more));
+  if (m.likes.length || m.comments.length) {
+    var box = h('div', { class: 'mo-box' });
+    if (m.likes.length) box.appendChild(h('div', { class: 'mo-likes', text: '♥ ' + m.likes.map(function (x) { return momentAuthor(x).name; }).join('、') }));
+    m.comments.forEach(function (c) {
+      var cm = h('div', { class: 'mo-cm' }, h('b', { text: momentAuthor(c.authorId).name }));
+      if (c.replyTo) { cm.appendChild(document.createTextNode(' 回复 ')); cm.appendChild(h('b', { text: momentAuthor(c.replyTo).name })); }
+      cm.appendChild(document.createTextNode('：' + c.text));
+      cm.addEventListener('click', function () {
+        if (c.authorId === 'me') menuSheet(null, [['删除这条评论', function () { m.comments = m.comments.filter(function (x) { return x.id !== c.id; }); save(); }]]);
+        else commentSheet(m, c.authorId, save);
+      });
+      box.appendChild(cm);
+    });
+    main.appendChild(box);
+  }
+  card.appendChild(avatarNode(a.avatar, a.name)); card.appendChild(main);
+  return card;
+}
+function commentSheet(m, replyTo, done) {
+  textSheet(replyTo ? '回复 ' + momentAuthor(replyTo).name : '评论', '', [
+    { text: '发送', cls: 'primary', fn: function (v) {
+      v = String(v || '').trim(); if (!v) return;
+      m.comments.push({ id: uid('mc'), authorId: 'me', text: v, ts: Date.now(), replyTo: replyTo || undefined });
+      done(); toast('已评论，TA 会在下次回复你时看到');
+    } }, { text: '取消' }]);
+}
+
+/* 发动态：文字 + 最多 9 张图 */
+function composeMoment() {
+  var ta = h('textarea', { placeholder: '这一刻的想法…', style: 'width:100%;min-height:96px;box-sizing:border-box;border:1px solid var(--line);border-radius:10px;padding:8px;background:var(--bg);outline:none' });
+  var imgs = [], thumbs = h('div', { class: 'mo-thumbs' });
+  function drawThumbs() {
+    thumbs.innerHTML = '';
+    imgs.forEach(function (u, i) { thumbs.appendChild(h('div', { class: 'mo-th' }, h('img', { src: u, alt: '' }), h('button', { type: 'button', text: '×', onclick: function () { imgs.splice(i, 1); drawThumbs(); } }))); });
+    if (imgs.length < 9) thumbs.appendChild(h('button', { type: 'button', class: 'mo-add', text: '＋', onclick: function () {
+      var f = h('input', { type: 'file', accept: 'image/*', multiple: true });
+      f.addEventListener('change', async function () {
+        var fs = Array.prototype.slice.call(f.files || []).slice(0, 9 - imgs.length);
+        for (var i = 0; i < fs.length; i++) { try { imgs.push((await compressImage(fs[i], { maxDim: 900, quality: 0.75 })).url); } catch (e) { toast(e.message); } }
+        drawThumbs();
+      });
+      f.click();
+    } }));
+  }
+  drawThumbs();
+  openSheet([h('h3', { text: '发动态' }), ta, thumbs, h('div', { class: 'btn-row', style: 'margin-top:10px' },
+    h('button', { class: 'btn primary', text: '发表', onclick: async function () {
+      var t = ta.value.trim(); if (!t && !imgs.length) { toast('写点什么或选张图'); return; }
+      closeSheet();
+      await dbPut('moments', { id: uid('mo'), authorId: 'me', content: t, images: imgs.slice(), ts: Date.now(), likes: [], comments: [], seen: {} });
+      toast('已发表。开了朋友圈的角色会在下次回复你时看到'); renderMoments();
+    } }),
+    h('button', { class: 'btn', text: '取消', onclick: closeSheet }))]);
+}
+
+function coverNode(onbg) {
+  var p = myProfile(), cv = h('div', { class: 'mo-cover', onclick: onbg || null });
+  if (p.bg) cv.style.backgroundImage = 'url("' + p.bg + '")';
+  return cv;
+}
+async function renderMoments() {
+  var b = $('moments-body'), top = b.scrollTop;
+  await loadMomChars();
+  var list = (await dbAll('moments')).sort(function (x, y) { return y.ts - x.ts; }), p = myProfile();
+  b.innerHTML = '';
+  var cv = coverNode(function () { pickImage(1000, 0.8, async function (u) { await saveProfile({ bg: u }); renderMoments(); }); });
+  cv.appendChild(h('div', { class: 'mo-cover-me' }, h('span', { class: 'mo-cover-name', text: p.name || '我' }), avatarNode(p.avatar, p.name)));
+  b.appendChild(cv);
+  var feed = h('div', { class: 'mo-feed' });
+  list.forEach(function (m) { feed.appendChild(momentCard(m, function () { if (!feed.firstChild) feed.appendChild(emptyMoments()); })); });
+  if (!list.length) feed.appendChild(emptyMoments());
+  b.appendChild(feed);
+  b.scrollTop = top;
+}
+function emptyMoments() { var e = h('div', { class: 'empty', text: '还没有动态。\n点右上角「＋」发一条；在「角色设置」里打开「朋友圈」，TA 也会发动态、评论你。' }); e.style.whiteSpace = 'pre-line'; return e; }
+
+async function renderMe() {
+  var b = $('me-body'), top = b.scrollTop;
+  await loadMomChars();
+  var p = myProfile(), all = (await dbAll('moments')), mine = all.filter(function (m) { return m.authorId === 'me'; }).sort(function (x, y) { return y.ts - x.ts; });
+  var likes = 0, cms = 0; mine.forEach(function (m) { likes += (m.likes || []).filter(function (x) { return x !== 'me'; }).length; cms += (m.comments || []).filter(function (x) { return x.authorId !== 'me'; }).length; });
+  b.innerHTML = '';
+  var cv = coverNode(function () { pickImage(1000, 0.8, async function (u) { await saveProfile({ bg: u }); renderMe(); }); });
+  var av = avatarNode(p.avatar, p.name); av.classList.add('mo-big'); av.addEventListener('click', function (e) { e.stopPropagation(); pickAvatar(async function (u) { await saveProfile({ avatar: u }); renderMe(); }); });
+  cv.appendChild(h('div', { class: 'mo-cover-hint', text: '点背景换图' }));
+  b.appendChild(cv);
+  b.appendChild(h('div', { class: 'me-head' }, av, h('div', { class: 'me-name', text: p.name || '我' }), h('div', { class: 'mo-sign', text: p.sign || '这个人很懒，什么都没写' }), h('div', { class: 'me-tip', text: '点头像换头像' })));
+  b.appendChild(h('div', { class: 'me-stats' },
+    h('div', {}, h('b', { text: String(mine.length) }), h('span', { text: '动态' })),
+    h('div', {}, h('b', { text: String(likes) }), h('span', { text: '获赞' })),
+    h('div', {}, h('b', { text: String(cms) }), h('span', { text: '评论' }))));
+  var nm = h('input', { type: 'text', placeholder: '昵称', maxlength: '20' }), sg = h('input', { type: 'text', placeholder: '个性签名', maxlength: '60' });
+  nm.value = p.name || ''; sg.value = p.sign || '';
+  nm.addEventListener('change', async function () { await saveProfile({ name: nm.value.trim() || '我' }); renderMe(); });
+  sg.addEventListener('change', async function () { await saveProfile({ sign: sg.value.trim() }); renderMe(); });
+  var pad = h('div', { class: 'pad' });
+  pad.appendChild(h('div', { class: 'group' }, h('div', { class: 'field' }, h('label', { text: '昵称（朋友圈里显示）' }), nm), h('div', { class: 'field' }, h('label', { text: '个性签名' }), sg)));
+  pad.appendChild(h('div', { class: 'group-title', text: '我的动态' }));
+  var feed = h('div', { class: 'mo-feed in-card' });
+  mine.forEach(function (m) { feed.appendChild(momentCard(m, function () { if (!feed.firstChild) feed.appendChild(h('div', { class: 'empty', text: '还没发过动态' })); })); });
+  if (!mine.length) feed.appendChild(h('div', { class: 'empty', text: '还没发过动态' }));
+  pad.appendChild(feed);
+  pad.appendChild(h('div', { class: 'btn-row', style: 'margin-top:16px' },
+    h('button', { class: 'btn', text: '发一条动态', onclick: composeMoment }),
+    all.length ? h('button', { class: 'btn danger', text: '清空朋友圈', onclick: function () { confirmSheet('清空全部朋友圈动态（包括角色发的）？不能恢复。', '清空', async function () { await dbClear('moments'); updateMomentsDot(); renderMe(); }, true); } }) : null));
+  pad.appendChild(h('div', { class: 'hint', style: 'color:var(--sub);font-size:12px;line-height:1.7', text: '角色参与朋友圈的开关在各自的「角色设置 → 朋友圈」。角色的动态、点赞、评论都跟着正常聊天回复一起生成，不会多发请求；所以 TA 要等你下次找 TA 聊天时才会看到并回应。' }));
+  b.appendChild(pad);
+  b.scrollTop = top;
+}
+
+/* 朋友圈红点：有角色新发的动态 / 新的评论（比上次打开朋友圈更晚）就亮 */
+function momentsSeenTs() { try { return Number(localStorage.getItem('mp_mo_seen')) || 0; } catch (e) { return 0; } }
+async function updateMomentsDot() {
+  if (!db) return;
+  var seen = momentsSeenTs(), on = false;
+  try {
+    (await dbAll('moments')).forEach(function (m) {
+      if (m.authorId !== 'me' && m.ts > seen) on = true;
+      (m.comments || []).forEach(function (c) { if (c.authorId !== 'me' && c.ts > seen) on = true; });
+    });
+  } catch (e) {}
+  document.querySelectorAll('.ltabs .lt-m .mdot').forEach(function (d) { d.hidden = !on; });
+}
+onShow['s-moments'] = function () { try { localStorage.setItem('mp_mo_seen', String(Date.now())); } catch (e) {} updateMomentsDot(); return renderMoments(); };
+onShow['s-me'] = renderMe;
+$('b-mo-new').onclick = composeMoment;
+var _renderListBase = renderList;
+onShow['s-list'] = function () { var r = _renderListBase.apply(this, arguments); updateMomentsDot(); return r; };
+
+/* ---- 给模型看的朋友圈上下文（只含用户和该角色自己的动态，最近 6 条） ---- */
+async function buildMomentsContext(char) {
+  var all = await dbAll('moments'), cs = await dbAll('characters'), p = myProfile(), cname = {};
+  cs.forEach(function (c) { cname[c.id] = c.name; });
+  var uname = char.userNickname || p.name || '用户';
+  function nm(id) { return id === 'me' ? uname : id === char.id ? '你' : (cname[id] || '某人'); }
+  var rel = all.filter(function (m) { return m.authorId === 'me' || m.authorId === char.id; }).sort(function (x, y) { return y.ts - x.ts; });
+  var last = rel.filter(function (m) { return m.authorId === char.id; })[0], shown = rel.slice(0, 6), L = [];
+  shown.forEach(function (m) {
+    var seen = m.seen && m.seen[char.id], cl = m.comments || [];
+    var line = '[' + m.id + '] ' + nm(m.authorId) + ' · ' + fmtTime(m.ts, char.timeZone).replace(/:\d\d$/, '') + (m.authorId === 'me' && seen == null ? '（新动态，你还没看过）' : '') + '：' +
+      String(m.content || '').slice(0, 100) + (m.images && m.images.length ? '（配了 ' + m.images.length + ' 张图）' : '');
+    if ((m.likes || []).length) line += '\n  赞：' + m.likes.map(nm).join('、');
+    cl.slice(-8).forEach(function (c, i) {
+      var idx = cl.length - Math.min(8, cl.length) + i, isNew = c.authorId !== char.id && (seen == null || idx >= seen);
+      line += '\n  ' + nm(c.authorId) + (c.replyTo ? ' 回复 ' + nm(c.replyTo) : '') + '：' + String(c.text || '').slice(0, 80) + (isNew ? '（新）' : '');
+    });
+    L.push(line);
+  });
+  return { ids: shown.map(function (m) { return m.id; }), text: '# 朋友圈\n你最近一次发朋友圈：' + (last ? fmtGap(Date.now() - last.ts) + '前' : '还没发过') + '。\n' + (L.length ? L.join('\n') : '（还没有任何动态）') };
+}
+/* 把模型输出的 <朋友圈> 落库：发动态 / 点赞 / 评论；并记下这个角色已经看过哪些评论 */
+async function applyMoments(char, data, ids) {
+  var all = await dbAll('moments'), byId = {}, changed = {}, now = Date.now(), p = myProfile(), names = {};
+  all.forEach(function (m) { byId[m.id] = m; });
+  names[(p.name || '').trim()] = 'me'; names['用户'] = 'me'; if (char.userNickname) names[char.userNickname.trim()] = 'me';
+  (await dbAll('characters')).forEach(function (c) { names[(c.name || '').trim()] = c.id; if (c.realName) names[c.realName.trim()] = c.id; });
+  var d = data && typeof data === 'object' ? data : {};
+  var post = typeof d.post === 'string' ? d.post.trim() : '';
+  if (post) { var nmo = { id: uid('mo'), authorId: char.id, content: post.slice(0, 500), images: [], ts: now, likes: [], comments: [], seen: {} }; byId[nmo.id] = nmo; changed[nmo.id] = true; }
+  (Array.isArray(d.likes) ? d.likes : []).forEach(function (id) {
+    var m = byId[id]; if (!m || ids.indexOf(id) === -1 || m.authorId === char.id) return;
+    m.likes = m.likes || []; if (m.likes.indexOf(char.id) === -1) { m.likes.push(char.id); changed[id] = true; }
+  });
+  (Array.isArray(d.comments) ? d.comments : []).slice(0, 4).forEach(function (c, i) {
+    if (!c) return; var m = byId[c.id], txt = typeof c.text === 'string' ? c.text.trim() : '';
+    if (!m || ids.indexOf(c.id) === -1 || !txt) return;
+    var rt = c.reply ? names[String(c.reply).trim()] : null; if (rt === char.id) rt = null;
+    m.comments = m.comments || []; m.comments.push({ id: uid('mc'), authorId: char.id, text: txt.slice(0, 200), ts: now + i, replyTo: rt || undefined }); changed[c.id] = true;
+  });
+  ids.forEach(function (id) { var m = byId[id]; if (!m) return; m.seen = m.seen || {}; m.seen[char.id] = (m.comments || []).length; changed[id] = true; });
+  var keys = Object.keys(changed); for (var i = 0; i < keys.length; i++) await dbPut('moments', byId[keys[i]]);
+  updateMomentsDot();
+  if ($('s-moments').classList.contains('active')) renderMoments();
+}
 mountTabs();
 
 $('b-newchar').onclick = async function () {
@@ -1401,9 +1622,14 @@ $('msgs').addEventListener('click', function (e) {
   e.stopPropagation(); e.preventDefault(); toggleSel(row.getAttribute('data-id'));
 }, true);
 $('sel-cancel').onclick = exitSelect;
-async function selectedMsgs() {
-  var all = await pageMessages(cur.id, null, 1e9), ids = selected;
-  return all.filter(function (m) { return ids[m.id]; });
+async function selectedMsgs() {   /* 只按 id 取选中的几条（一个事务），不再把整段聊天记录读出来 */
+  var ids = Object.keys(selected);
+  var out = await new Promise(function (res, rej) {
+    var tx = db.transaction('messages'), os = tx.objectStore('messages'), got = [];
+    ids.forEach(function (id) { os.get(id).onsuccess = function (e) { if (e.target.result) got.push(e.target.result); }; });
+    tx.oncomplete = function () { res(got); }; tx.onerror = tx.onabort = function () { rej(tx.error); };
+  });
+  return out.sort(function (a, b) { return a.ts - b.ts; });
 }
 $('sel-copy').onclick = async function () {
   var ms = await selectedMsgs(); if (!ms.length) { toast('还没选消息'); return; }
@@ -1413,8 +1639,10 @@ $('sel-copy').onclick = async function () {
 $('sel-del').onclick = function () {
   var n = Object.keys(selected).length; if (!n) { toast('还没选消息'); return; }
   confirmSheet('删除选中的 ' + n + ' 条消息？', '删除', async function () {
-    var dm = await selectedMsgs(); await deleteMessages(dm);
-    exitSelect(); reloadChat();
+    var dm = await selectedMsgs();
+    exitSelect();                                        /* 先把多选栏收掉，界面立刻有反应 */
+    dm.forEach(function (m) { var row = $('msgs').querySelector('.row[data-id="' + m.id + '"]'); if (row) row.remove(); });
+    await deleteMessages(dm); reloadChat();
   }, true);
 };
 
@@ -1439,11 +1667,18 @@ async function recallMessage(m) {
 /* 删除消息：真的删掉，但留一条看不见的记录，让角色知道你删了什么 */
 async function deleteMessages(list) {
   var real = list.filter(function (m) { return isRealMsg(m) && m.type !== 'recalled'; });
-  for (var i = 0; i < list.length; i++) await dbDel('messages', list[i].id);
+  var rec = null;
   if (real.length) {
     var parts = real.slice(0, 6).map(function (m) { return (m.role === 'user' ? '用户发的「' : '你发的「') + msgBrief(m, 40) + '」'; });
-    await dbPut('messages', { id: uid(cur.id), characterId: cur.id, role: 'user', type: 'system', content: '[用户删除了 ' + real.length + ' 条消息：' + parts.join('；') + (real.length > 6 ? '…等' : '') + '。这些消息已从聊天里消失，但你知道它们的内容。]', ts: Date.now() });
+    rec = { id: uid(cur.id), characterId: cur.id, role: 'user', type: 'system', content: '[用户删除了 ' + real.length + ' 条消息：' + parts.join('；') + (real.length > 6 ? '…等' : '') + '。这些消息已从聊天里消失，但你知道它们的内容。]', ts: Date.now() };
   }
+  dbDirty = true;
+  await new Promise(function (res, rej) {   /* 全部删除 + 那条隐藏记录，一个事务搞定 */
+    var tx = db.transaction('messages', 'readwrite'), os = tx.objectStore('messages');
+    list.forEach(function (m) { os.delete(m.id); });
+    if (rec) os.put(rec);
+    tx.oncomplete = res; tx.onerror = tx.onabort = function () { rej(tx.error); };
+  });
 }
 $('sel-edit').onclick = async function () {
   var ids = Object.keys(selected); if (ids.length !== 1) { toast('编辑只能选一条消息'); return; }
@@ -1807,7 +2042,7 @@ async function openStickerPanel(catId, manage) {
     };
     grid.appendChild(cell);
   });
-  openSheet([h('h3', { text: manage ? '管理表情包（点一个删除）' : '发送表情包（' + list.length + '）' }), tabs, grid,
+  openBottomSheet([h('h3', { text: manage ? '管理表情包（点一个删除）' : '发送表情包（' + list.length + '）' }), tabs, grid,
     manage ? h('div', { class: 'btn-row', style: 'margin-bottom:8px' },
       h('button', { class: 'btn', text: '＋ 新建分类', onclick: function () { addStickerCategory(function () { openStickerPanel(catId, manage); }); } }),
       curCat ? h('button', { class: 'btn', text: '重命名分类', onclick: function () { renameStickerCategory(curCat, function () { openStickerPanel(catId, manage); }); } }) : null,
@@ -1873,7 +2108,7 @@ function batchStickerForm(cats, catId) {
         var add = [], dup = 0;
         items.forEach(function (it) { if (have[it.url]) { dup++; return; } have[it.url] = 1; add.push({ id: uid('sticker'), name: it.name, url: it.url, categoryId: sel.value || null }); });
         await dbBulkPut('stickers', add);
-        toast('已导入 ' + add.length + ' 个' + (dup ? '，跳过 ' + dup + ' 个重复' : ''));
+        iosAlert('导入完成', '已导入 ' + add.length + ' 个' + (dup ? '，跳过 ' + dup + ' 个重复' : ''));
         openStickerPanel(catId, false);
       } }), h('button', { class: 'btn', text: '返回', onclick: function () { openStickerPanel(catId, false); } }))]);
 }
@@ -2037,10 +2272,11 @@ async function buildPrompt(char) {
     preset = { content: [preset.content || ''].concat(extra).filter(function (x) { return String(x).trim(); }).join('\n\n') };
   }
   var wantThought = !!(char.autoThought && char.autoThought.enabled);
+  var moCtx = char.momentsOn ? await buildMomentsContext(char) : null;
   var pool = stickerPool(await dbAll('stickers'), char.stickerCategoryIds);
   var shown = sampleStickers(pool, settings.stickerPromptLimit);
-  var system = buildSystem({ gap: gap, char: char, settings: settings, entries: entries, memories: mems, stickers: shown, thought: thought, preset: preset, wantThought: wantThought, voice: audioUsed ? 'audio' : hasVoice, dictate: dictIds.length, changes: changes, now: Date.now() });
-  return { system: system, messages: apiMsgs, pool: pool, wantThought: wantThought, dictIds: dictIds, stats: { history: history.length, entries: entries.length, memories: mems.length, stickers: shown.length } };
+  var system = buildSystem({ gap: gap, char: char, settings: settings, entries: entries, memories: mems, stickers: shown, thought: thought, preset: preset, wantThought: wantThought, momentsText: moCtx ? moCtx.text : '', voice: audioUsed ? 'audio' : hasVoice, dictate: dictIds.length, changes: changes, now: Date.now() });
+  return { system: system, messages: apiMsgs, pool: pool, wantThought: wantThought, momentIds: moCtx ? moCtx.ids : null, dictIds: dictIds, stats: { history: history.length, entries: entries.length, memories: mems.length, stickers: shown.length } };
 }
 
 /* 点「等回复」= 发一次请求。按钮永远可点：后台慢时可以再点一次，
@@ -2079,7 +2315,8 @@ async function generateReply(fresh) {
     });
     if (!r.active || r.won) return;
     var dict = extractDictation(text);   /* 用户语音的文字也随回复一起回来，不另外请求 */
-    var st = extractStatus(dict.reply);
+    var mo = extractMoments(dict.reply);   /* 朋友圈互动也随回复一起回来 */
+    var st = extractStatus(mo.reply);
     var ex = extractThought(st.reply), replyText = ex.reply;   /* 心声同理 */
     var items = char.offlineMode ? (replyText.trim() ? [{ type: 'offline', content: replyText.trim() }] : []) : parseReplyLines(splitReply(replyText, 12), prompt.pool, !!char.aiVoice), base = Date.now(), saved = [];
     if (!items.length) throw new Error('模型的回复里没有可显示的内容（只有找不到的表情包）。原始回复：' + text.slice(0, 200));
@@ -2095,6 +2332,7 @@ async function generateReply(fresh) {
     });
     await dbBulkPut('messages', saved);
     await applyDictation(prompt.dictIds, dict.texts);
+    if (prompt.momentIds) { try { await applyMoments(char, mo.data, prompt.momentIds); } catch (e) { toast('朋友圈互动没存上：' + e.message); } }
     if (prompt.wantThought) {
       if (ex.thought) { await dbPut('thoughts', { characterId: char.id, heartfeltVoice: ex.thought.heartfeltVoice, randomJottings: ex.thought.randomJottings, ts: Date.now() }); refreshThoughtCloud(); }
       else toast('这次回复没带上心声（模型没按格式写）');
@@ -2177,12 +2415,13 @@ async function clearChat() {
   var tx = db.transaction('messages', 'readwrite'), os = tx.objectStore('messages');
   all.forEach(function (m) { os.delete(m.id); });
   await new Promise(function (r) { tx.oncomplete = r; });
-  reloadChat(); toast('已清空');
+  reloadChat(); iosAlert('已清空', '聊天记录已清空');
 }
 
 /* ---------- 消息提示音 / 未读红点 / 顶部通知条 / 系统通知 ---------- */
 function notifySrc() { return notifyFile || settings.notifyUrl || ''; }
 function playNotify() {
+  if (document.hidden) return;   /* 页面在后台/锁屏时不放前端提示音，铃声交给系统通知（见 sysNotify） */
   try { var src = notifySrc(); if (!src) return; var a = new Audio(src); a.play().catch(function () {}); } catch (e) {}
 }
 var unread = {};   /* { 角色id: 未读条数 }，存在 settings 仓库的 unread 项里，刷新页面也在 */
@@ -2224,7 +2463,7 @@ function showBanner(char, text) {
 /* 页面在后台（切到别的 App / 锁屏）时的系统通知：要在「API设置」里打开并允许通知；不同浏览器支持不一样 */
 function sysNotify(char, text) {
   if (!settings.sysNotify || !('Notification' in window) || Notification.permission !== 'granted') return;
-  var opt = { body: text, tag: 'chat-' + char.id, renotify: true, data: { cid: char.id }, icon: /^data:image|^https?:/.test(char.avatar || '') ? char.avatar : undefined };
+  var opt = { body: text, tag: 'chat-' + char.id, renotify: true, silent: false, data: { cid: char.id }, icon: /^data:image|^https?:/.test(char.avatar || '') ? char.avatar : undefined };
   function direct() { try { var n = new Notification(char.name, opt); n.onclick = function () { window.focus(); openChatFromOutside(char.id); n.close(); }; } catch (e) {} }
   /* 优先走 Service Worker 通知：点击后由 sw.js 把页面切到对应聊天（安卓 Chrome 也只支持这种） */
   try {
@@ -2341,7 +2580,7 @@ function importChatLog(c, done) {
           var x = Object.assign({}, m, { characterId: c.id }); if (!x.id || (!replace && have[x.id])) x.id = uid(c.id); add.push(x);
         });
         await dbBulkPut('messages', add);
-        toast('已导入 ' + add.length + ' 条' + (list.length - add.length > 0 ? '，跳过重复 ' + (list.length - add.length) + ' 条' : ''));
+        iosAlert('导入完成', '已导入 ' + add.length + ' 条' + (list.length - add.length > 0 ? '，跳过重复 ' + (list.length - add.length) + ' 条' : ''));
         if (cur && cur.id === c.id) reloadChat();
         if (done) done();
       } catch (e) { toast('导入失败：' + e.message); }
@@ -2370,7 +2609,7 @@ async function renderThoughts() {
     var g = h('div', { class: 'group' });
     rows.slice(1).forEach(function (r) {
       g.appendChild(h('div', { class: 'item', onclick: function () {
-        openSheet([h('h3', { text: fmtTime(r.value.ts).replace(/:\d\d$/, '') }), h('div', { class: 'th-voice', text: '“' + (r.value.heartfeltVoice || '') + '”' }), h('div', { class: 'th-jot', text: r.value.randomJottings || '' }),
+        openBottomSheet([h('h3', { text: fmtTime(r.value.ts).replace(/:\d\d$/, '') }), h('div', { class: 'th-voice', text: '“' + (r.value.heartfeltVoice || '') + '”' }), h('div', { class: 'th-jot', text: r.value.randomJottings || '' }),
           h('div', { class: 'btn-row', style: 'margin-top:12px' },
             h('button', { class: 'btn danger', text: '删除', onclick: async function () { closeSheet(); await dbDel('thoughts', r.key); renderThoughts(); } }),
             h('button', { class: 'btn', text: '关闭', onclick: closeSheet }))]);
@@ -2508,7 +2747,7 @@ $('b-mem-refine').onclick = async function () {
           var out = await refineMemories(cur, mems, target);
           textSheet('精炼结果（可编辑）', out, [
             { text: '保存为精炼记忆', cls: 'primary', fn: async function (v) {
-              await dbPut('memories', { id: uid('mem'), characterId: cur.id, content: v.trim(), ts: Date.now(), kind: 'refined' }); renderMemory(); toast('已保存'); } },
+              await dbPut('memories', { id: uid('mem'), characterId: cur.id, content: v.trim(), ts: Date.now(), kind: 'refined' }); renderMemory(); iosAlert('已保存', '精炼记忆已保存'); } },
             { text: '放弃' }], '保存后，这条精炼记忆会取代它之前的总结带入提示词；旧记忆仍保留在列表里，不会被删除。');
         } catch (e) { openSheet([h('h3', { text: '精炼失败' }), h('pre', { text: e.message }), h('button', { class: 'btn', text: '关闭', onclick: closeSheet })]); }
       } }), h('button', { class: 'btn', text: '取消', onclick: closeSheet }))]);
@@ -2611,6 +2850,10 @@ onShow['s-char'] = async function () {
   body.appendChild(h('div', { class: 'group' },
     h('div', { class: 'field inline' }, h('div', {}, h('label', { text: '每次回复都更新心声' }), h('div', { class: 'hint', text: '心声跟着 TA 的回复一起生成，不会多发一次请求；只是每次回复末尾多一小段' })), thAuto.el),
     h('div', { class: 'field inline' }, h('div', {}, h('label', { text: '让角色知道自己的心声' }), h('div', { class: 'hint', text: '把最新心声放进提示词，言行会更一致，但会多花一点 token' })), thInject.el)));
+  var moOn = switchEl(c.momentsOn === true);
+  body.appendChild(h('div', { class: 'group-title', text: '朋友圈' }));
+  body.appendChild(h('div', { class: 'group' },
+    h('div', { class: 'field inline' }, h('div', {}, h('label', { text: '让 TA 参与朋友圈' }), h('div', { class: 'hint', text: '开启后，TA 每次回复你时会顺带看一眼朋友圈，可能发动态、点赞、评论你的动态；全部并进同一次请求，不会多发请求，只是提示词多一小段（最近 6 条动态）' })), moOn.el)));
   body.appendChild(h('div', { class: 'group-title', text: '挂载世界书' }));
   var wbPick = multiPick('选择要挂载的世界书', books.map(function (b) { return { id: b.id, name: b.name, sub: (b.entries || []).length + ' 条' }; }), c.worldBookIds || [], '还没有世界书');
   body.appendChild(h('div', { class: 'group' }, wbPick.el));
@@ -2629,12 +2872,19 @@ onShow['s-char'] = async function () {
     h('div', { class: 'hint', text: '只针对这个角色。导出的文件可以导入到同一个角色，或换设备后导回来。' })));
   body.appendChild(h('div', { class: 'btn-row' }, h('button', { class: 'btn danger', text: '删除这个角色', onclick: function () {
     confirmSheet('删除「' + c.name + '」及其全部聊天和记忆？', '删除', async function () {
-      var all = await pageMessages(c.id, null, 1e9), tx = db.transaction(['messages', 'memories', 'characters'], 'readwrite');
+      var all = await pageMessages(c.id, null, 1e9), moAll = await dbAll('moments'), tx = db.transaction(['messages', 'memories', 'characters', 'moments'], 'readwrite');
       all.forEach(function (m) { tx.objectStore('messages').delete(m.id); });
       (await dbByIndex('memories', 'byChar', c.id)).forEach(function (m) { tx.objectStore('memories').delete(m.id); });
+      moAll.forEach(function (m) {   /* TA 发的动态删掉；TA 在别人动态下的赞和评论也拿掉 */
+        if (m.authorId === c.id) { tx.objectStore('moments').delete(m.id); return; }
+        var n1 = (m.likes || []).length, n2 = (m.comments || []).length;
+        m.likes = (m.likes || []).filter(function (x) { return x !== c.id; });
+        m.comments = (m.comments || []).filter(function (x) { return x.authorId !== c.id; });
+        if (m.likes.length !== n1 || m.comments.length !== n2) { m.seen = {}; tx.objectStore('moments').put(m); }
+      });
       tx.objectStore('characters').delete(c.id);
       await new Promise(function (r) { tx.oncomplete = r; });
-      editing = null; nav = ['s-home', 's-list']; activate('s-list'); syncHist(); toast('已删除');
+      editing = null; nav = ['s-home', 's-list']; activate('s-list'); syncHist(); iosAlert('已删除', '角色已删除');
     }, true);
   } })));
   editing._collect = function () {
@@ -2646,7 +2896,7 @@ onShow['s-char'] = async function () {
     var on = stPick.get();
     c.stickerCategoryIds = (!stOpts.length || on.length === stOpts.length) ? null : on;
     c.avatar = av.avatar; c.userAvatar = av.userAvatar;
-    c.autoThought = { enabled: thAuto.input.checked };
+    c.autoThought = { enabled: thAuto.input.checked }; c.momentsOn = moOn.input.checked;
     c.pinned = pinOn.input.checked; c.timeAware = taOn.input.checked; c.timeZone = tzSel.value || '';
     c.autoVoiceText = avOn.input.checked; c.aiVoice = aiVoiceOn.input.checked;
     c.offlineMode = offOn.input.checked;
@@ -2778,7 +3028,7 @@ onShow['s-chatset'] = function () {
   body.appendChild(h('div', { class: 'glass' }, h('h4', { text: '气泡自定义 CSS（只对这个角色的聊天页生效）' }),
     presetBar('bubble', { snap: function () { return { css: ta.value }; }, apply: async function (v) { ta.value = v.css || ''; cur.bubbleCss = ta.value; await saveCur(); applyChatLook(); } }), ta,
     h('div', { class: 'btn-row', style: 'margin-top:10px' },
-      h('button', { class: 'btn primary', text: '应用并保存', onclick: async function () { cur.bubbleCss = ta.value; await saveCur(); applyChatLook(); toast('已应用'); } }),
+      h('button', { class: 'btn primary', text: '应用并保存', onclick: async function () { cur.bubbleCss = ta.value; await saveCur(); applyChatLook(); iosAlert('已保存', '气泡样式已应用并保存'); } }),
       h('button', { class: 'btn', text: '清空', onclick: async function () { ta.value = ''; cur.bubbleCss = ''; await saveCur(); applyChatLook(); } })),
     h('div', { class: 'bt-hint', text: '常用选择器：.bubble 气泡、.row.me 我的消息、.row:not(.me) 对方消息、.bubble.offline 线下长文、.sysline 提示行、#msgs 聊天区' })));
 };
@@ -2841,7 +3091,7 @@ async function fillBeautyPresets(box) {
     box.appendChild(g);
   }
   box.appendChild(h('div', { class: 'btn-row' }, h('button', { class: 'btn primary', text: '＋ 把当前美化存为新预设', onclick: function () {
-    nameSheet('预设名称', '', async function (nm) { await dbPut('beautyPresets', Object.assign({ id: uid('bp'), name: nm, ts: Date.now() }, beautySnapshot())); fillBeautyPresets(box); toast('已保存「' + nm + '」'); }, '例如：夜间粉 / 极简白');
+    nameSheet('预设名称', '', async function (nm) { await dbPut('beautyPresets', Object.assign({ id: uid('bp'), name: nm, ts: Date.now() }, beautySnapshot())); fillBeautyPresets(box); iosAlert('已保存', '美化预设「' + nm + '」已保存'); }, '例如：夜间粉 / 极简白');
   } })));
 }
 onShow['s-beauty'] = function () {
@@ -2990,8 +3240,8 @@ onShow['s-beauty'] = function () {
   body.appendChild(h('div', { class: 'glass' }, h('h4', { text: '自定义美化 CSS' }),
     presetBar('css', { snap: function () { return { css: ta.value }; }, apply: async function (v) { ta.value = v.css || ''; settings.customCss = ta.value; await saveSettings(); applyTheme(); } }), ta,
     h('div', { class: 'btn-row', style: 'margin-top:10px' },
-      h('button', { class: 'btn primary', text: '应用并保存', onclick: async function () { settings.customCss = ta.value; await saveSettings(); applyTheme(); toast('已应用'); } }),
-      h('button', { class: 'btn', text: '清空', onclick: async function () { ta.value = ''; settings.customCss = ''; await saveSettings(); applyTheme(); toast('已清空'); } })),
+      h('button', { class: 'btn primary', text: '应用并保存', onclick: async function () { settings.customCss = ta.value; await saveSettings(); applyTheme(); iosAlert('已保存', '自定义 CSS 已应用并保存'); } }),
+      h('button', { class: 'btn', text: '清空', onclick: async function () { ta.value = ''; settings.customCss = ''; await saveSettings(); applyTheme(); iosAlert('已清空', '自定义 CSS 已清空'); } })),
     h('div', { class: 'bt-hint', text: '写在这里的 CSS 会盖在上面的方案之上。\n可用变量：--bg --card --ink --sub --line --accent --me --them\n常用选择器：.bubble 气泡、.row.me 我的消息、.bar 顶栏、.app .tile 桌面图标、.glass 磨砂卡片' })));
 };
 
@@ -3063,7 +3313,7 @@ function pickModel(mk, bk, kk, done) {
     } catch (e) { list.innerHTML = ''; list.appendChild(h('div', { class: 'empty', style: 'white-space:pre-wrap;word-break:break-all;text-align:left;user-select:text', text: e.message })); }
     pull.disabled = false; pull.textContent = '拉取模型列表';
   } });
-  openSheet([h('h3', { text: '选择模型' }), q, list, info, h('div', { class: 'btn-row', style: 'margin-top:8px' }, pull, h('button', { type: 'button', class: 'btn', text: '关闭', onclick: closeSheet }))]);
+  openBottomSheet([h('h3', { text: '选择模型' }), q, list, info, h('div', { class: 'btn-row', style: 'margin-top:8px' }, pull, h('button', { type: 'button', class: 'btn', text: '关闭', onclick: closeSheet }))]);
   render();
 }
 function buildSettings() {
@@ -3233,7 +3483,7 @@ async function importWorldBooks() {
       else books = parseWbText(await file.text(), base);
       if (!books.length) throw new Error('没有读到任何条目');
       for (var i = 0; i < books.length; i++) await dbPut('worldBooks', { id: uid('wb'), name: books[i].name, categoryId: null, entries: books[i].entries });
-      toast('已导入 ' + books.length + ' 本世界书，共 ' + books.reduce(function (n, b) { return n + b.entries.length; }, 0) + ' 条'); renderWbList();
+      iosAlert('导入完成', '已导入 ' + books.length + ' 本世界书，共 ' + books.reduce(function (n, b) { return n + b.entries.length; }, 0) + ' 条'); renderWbList();
     } catch (e) { openSheet([h('h3', { text: '导入失败' }), h('pre', { text: e.message }), h('button', { class: 'btn', text: '关闭', onclick: closeSheet })]); }
   });
   f.click();
@@ -3321,7 +3571,10 @@ $('b-wb-save').onclick = async function () {
 
 /* ---------- 线下预设（写作风格 / 格式要求；和世界书一样可导入导出） ---------- */
 function presetsToText(list) {
-  return list.map(function (p) { return '# ' + (p.name || '未命名') + '\n\n' + (p.content || ''); }).join('\n\n\n');
+  return list.map(function (p) {
+    var body = [p.content || ''].concat((p.entries || []).filter(function (e) { return e && e.content && e.enabled !== false; }).map(function (e) { return (e.title ? '【' + e.title + '】\n' : '') + e.content; })).filter(function (x) { return String(x).trim(); }).join('\n\n');
+    return '# ' + (p.name || '未命名') + '\n\n' + body;
+  }).join('\n\n\n');
 }
 function parsePresetText(text, defName) {
   var out = [], p = null;
@@ -3388,7 +3641,7 @@ async function importPresets() {
       if (!list.length) throw new Error('没有读到任何预设内容');
       list = list.filter(function (x) { return x.content || (x.entries && x.entries.length); });
       for (var i = 0; i < list.length; i++) await dbPut('offlinePresets', { id: uid('pr'), name: list[i].name, content: list[i].content || '', entries: list[i].entries || undefined });
-      toast('已导入 ' + list.length + ' 个预设'); renderPrList();
+      iosAlert('导入完成', '已导入 ' + list.length + ' 个预设'); renderPrList();
     } catch (e) { openSheet([h('h3', { text: '导入失败' }), h('pre', { text: e.message }), h('button', { class: 'btn', text: '关闭', onclick: closeSheet })]); }
   });
   f.click();
@@ -3411,7 +3664,7 @@ async function renderPrList() {
 }
 onShow['s-prlist'] = renderPrList;
 $('b-pr-add').onclick = async function () {
-  var p = { id: uid('pr'), name: '新预设', content: '' };
+  var p = { id: uid('pr'), name: '新预设', content: '', entries: [{ title: '', keys: [], content: '', enabled: true }] };
   await dbPut('offlinePresets', p); editPreset(p.id);
 };
 var prEditing = null;
@@ -3419,28 +3672,37 @@ async function editPreset(id) { prEditing = await dbGet('offlinePresets', id); g
 onShow['s-predit'] = function () {
   if (!prEditing) return;
   var p = prEditing, body = $('predit-body'); body.innerHTML = '';
-  var name = h('input', { type: 'text', value: p.name }), ta = h('textarea', { style: 'min-height:320px' }); ta.value = p.content || '';
-  body.appendChild(h('div', { class: 'group' }, field('预设名称', name), field('预设内容', ta, '写给模型的写作要求，比如文风、人称、描写重点、格式。字数请在角色设置里填，这里不用写。')));
-  /* 条目（像世界书）：没填关键词=一直带入，填了=最近聊天出现关键词才带入 */
-  var eHolder = h('div', {}), eRows = [];
-  function addPrEntry(e) {
+  var name = h('input', { type: 'text', value: p.name });
+  body.appendChild(h('div', { class: 'group' }, field('预设名称', name)));
+  /* 旧版预设顶部那段「预设内容」并进第一个条目（没关键词 = 一直带入），内容不丢 */
+  var entries = (p.entries || []).slice();
+  if (String(p.content || '').trim()) entries.unshift({ title: '写作要求', keys: [], content: String(p.content).trim(), enabled: true });
+  if (!entries.length) entries.push({ title: '', keys: [], content: '', enabled: true });
+  var holder = h('div', {}), rows = [];
+  function addEntry(e) {
     var t = h('input', { type: 'text', value: e.title || '', placeholder: '条目标题' });
-    var k = h('input', { type: 'text', value: (e.keys || []).join(','), placeholder: '关键词，逗号分隔；留空 = 一直带入' });
-    var c = h('textarea', { style: 'min-height:90px' }); c.value = e.content || '';
-    var on = h('input', { type: 'checkbox' }); on.checked = e.enabled !== false;
-    var row = h('div', { class: 'group' }, field('标题', t), field('关键词', k), field('内容', c),
-      h('div', { class: 'btn-row' }, h('label', { style: 'display:flex;align-items:center;gap:6px;font-size:13px' }, on, '启用'),
-        h('button', { class: 'btn danger', text: '删除条目', onclick: function () { eRows.splice(eRows.indexOf(r), 1); row.remove(); } })));
-    var r = { get: function () { return { title: t.value.trim(), keys: k.value.split(/[,，、]/).map(function (x) { return x.trim(); }).filter(Boolean), content: c.value.trim(), enabled: on.checked }; } };
-    eRows.push(r); eHolder.appendChild(row);
+    var k = h('input', { type: 'text', value: (e.keys || []).join(','), placeholder: '关键词，用逗号分隔；留空 = 一直带入' });
+    var c = h('textarea', {}); c.value = e.content || '';
+    var en = switchEl(e.enabled !== false);
+    var box = h('div', { class: 'group' }, field('标题', t), field('关键词', k), field('内容', c),
+      h('div', { class: 'field inline' }, h('label', { text: '启用' }), en.el),
+      h('div', { class: 'field' }, h('button', { class: 'btn danger', text: '删除此条目', onclick: function () { box.remove(); rows = rows.filter(function (r) { return r.box !== box; }); } })));
+    rows.push({ box: box, t: t, k: k, c: c, en: en.input }); holder.appendChild(box);
   }
-  (p.entries || []).forEach(addPrEntry);
-  body.appendChild(h('h4', { text: '条目（可选）', style: 'margin:14px 4px 6px' })); body.appendChild(eHolder);
-  body.appendChild(h('div', { class: 'btn-row' }, h('button', { class: 'btn', text: '＋ 添加条目', onclick: function () { addPrEntry({}); } })));
-  body.appendChild(h('div', { class: 'btn-row' }, h('button', { class: 'btn danger', text: '删除这个预设', onclick: function () {
-    confirmSheet('删除「' + p.name + '」？用了它的角色会回到不使用预设。', '删除', async function () { await dbDel('offlinePresets', p.id); prEditing = null; back(); }, true);
-  } })));
-  p._collect = function () { p.name = name.value.trim() || '未命名'; p.content = ta.value; var es = eRows.map(function (r) { return r.get(); }).filter(function (e) { return e.content; }); if (es.length) p.entries = es; else delete p.entries; return p; };
+  entries.forEach(addEntry);
+  body.appendChild(holder);
+  body.appendChild(h('div', { class: 'btn-row' }, h('button', { class: 'btn', text: '＋ 添加条目', onclick: function () { addEntry({ enabled: true }); } }),
+    h('button', { class: 'btn danger', text: '删除这个预设', onclick: function () {
+      confirmSheet('删除「' + p.name + '」？\n用了它的角色会回到不使用预设。', '删除', async function () { await dbDel('offlinePresets', p.id); prEditing = null; back(); }, true);
+    } })));
+  body.appendChild(h('div', { class: 'hint', style: 'color:var(--sub);font-size:12px;line-height:1.7;padding:0 4px', text: '条目是写给模型的写作要求（文风、人称、描写重点、格式…）。关键词留空的条目每次都带入；填了关键词的，最近聊天里出现关键词才带入。字数在角色设置里填，这里不用写。' }));
+  p._collect = function () {
+    p.name = name.value.trim() || '未命名'; p.content = '';
+    p.entries = rows.map(function (r) {
+      return { title: r.t.value.trim(), keys: r.k.value.split(/[,，、]/).map(function (s) { return s.trim(); }).filter(Boolean), content: r.c.value, enabled: r.en.checked };
+    }).filter(function (e) { return String(e.content).trim(); });
+    return p;
+  };
 };
 $('b-pr-save').onclick = async function () {
   if (!prEditing || !prEditing._collect) return;
@@ -3460,6 +3722,7 @@ var PARTS = [
   { id: 'msgs', name: '聊天记录', stores: ['messages'] },
   { id: 'mems', name: '记忆', stores: ['memories'] },
   { id: 'thoughts', name: '心声', stores: ['thoughts'] },
+  { id: 'moments', name: '朋友圈', stores: ['moments'], settings: ['myProfile'], hint: '动态、点赞、评论，以及个人主页（头像、昵称、签名、背景）' },
   { id: 'wb', name: '世界书', stores: ['worldBooks', 'worldBookCategories'] },
   { id: 'stk', name: '表情包', stores: ['stickers', 'stickerCategories'] },
   { id: 'presets', name: '预设（线下写作）', stores: ['offlinePresets'] },
