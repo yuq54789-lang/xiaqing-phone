@@ -92,7 +92,7 @@ function countMessagesAfter(cid, ts) {
 var TTS_TAGS = ['笑', '轻笑', '咯咯笑', '叹气', '惊呼', '吸气', '呼气', '喘息', '耳语', '唱歌', '哼歌', '结巴', '停顿', '哭声', '抽泣', '呜咽', '呻吟', '清嗓', '咳嗽', '吸鼻子', '咂嘴', '啧嘴', '打哈欠', '打喷嚏', '打嗝', '吞咽', '闷哼', '冷笑', '哼鼻子'];
 /* 语音条里显示的文字：去掉所有半角/全角方括号及里面的声音标签（传给 TTS 的仍保留标签） */
 function stripVoiceTags(t) { return String(t || '').replace(/[\[［][^\]］]+[\]］]/g, '').replace(/\s{2,}/g, ' ').trim(); }
-var OUTPUT_RULES = '像真人在手机上聊天一样回复：口语化，简短自然。\n把回复拆成几条短消息，每条消息单独一行（最多 50 条）。\n想引用用户说过的某句话来回复时，在那条消息开头写 [引用：用户原话片段]，后面接你的回复，同一行；偶尔用就好。\n格式铁律：不要输出 JSON；语音必须写成单独一行的 [语音：…]，引用必须写成 [引用：…]后接回复，不能把它们当成普通文字写出来或写成别的格式。\n不要在开头写你的名字，不要写旁白、括号动作或解释，除非角色设定要求这样。\n始终保持角色设定，不要承认自己是 AI。';
+var OUTPUT_RULES = '像真人在手机上聊天一样回复：口语化，简短自然。\n把回复拆成几条短消息，每条消息单独一行（最多 20 条）。\n想引用用户说过的某句话来回复时，在那条消息开头写 [引用：用户原话片段]，后面接你的回复，同一行；偶尔用就好。\n格式铁律：不要输出 JSON；语音必须写成单独一行的 [语音：…]，引用必须写成 [引用：…]后接回复，不能把它们当成普通文字写出来或写成别的格式。\n不要在开头写你的名字，不要写旁白、括号动作或解释，除非角色设定要求这样。\n始终保持角色设定，不要承认自己是 AI。';
 /* 线下模式：面对面的小说式叙述，不拆气泡、不发表情包 */
 var OFFLINE_RULES = '现在是线下场景，你和用户面对面相处，不再是手机聊天。\n用小说式的叙述回复：用第三人称写角色的动作、神态、环境，对白用「」括起来，连贯地写成一段或几段文字。\n篇幅 {{MIN}} 到 {{MAX}} 字，一次写完，不要拆成多条消息，不要发表情包，不要用你的名字做开头。\n只写角色自己的言行和感受，不要替用户说话、替用户做动作。\n始终保持角色设定，不要承认自己是 AI。';
 /* 线下模式的完整规则 = 内置规则（字数按角色设置填） + 你选的预设（文风/格式要求） */
@@ -111,7 +111,7 @@ var DEFAULTS = {
   baseUrl: '', apiKey: '', model: '', temperature: 0.8,
   stream: false, themeId: 'default', customCss: '', homeBg: '', fontUrl: '', fontData: '', fontName: '',
   secBaseUrl: '', secApiKey: '', secModel: '',
-  scanDepth: 5, worldBookMaxChars: 6000, memoryLimit: 20, summaryMax: 200, defaultContext: 30, stickerPromptLimit: 60, autoReply: false, period: null, myProfile: null, musicApi: '', musicApiBackup: '', apiPresets: [], activePresetId: null, weather: null, homeLayout: null,
+  scanDepth: 5, worldBookMaxChars: 6000, memoryLimit: 20, summaryMax: 200, defaultContext: 30, ctxWindow: 25, ctxStep: 10, rollMax: 600, depthRole: 'system', stickerPromptLimit: 60, autoReply: false, period: null, myProfile: null, musicApi: '', musicApiBackup: '', apiPresets: [], activePresetId: null, weather: null, homeLayout: null,
   bubbleSlow: 1,                 /* 气泡出现速度倍数：1=默认，越大越慢 */
   notifyUrl: '', notifyName: '', /* 消息提示音（网址 / 上传的文件名） */
   clockLayout: 'h', clockColor: '', dateColor: '', wxColor: '', clockDy: 0, dateDy: 0, wxDy: 0, clockDx: 0, dateDx: 0, wxDx: 0,   /* 时钟：横/竖排、三处文字颜色、三处上下及左右位置（互不绑定） */
@@ -196,6 +196,28 @@ function selectMemories(mems, queryTexts, windowSize, matchLimit) {
   return { core: core, recent: recent, matched: matched, all: core.concat(matched, recent) };
 }
 
+/* ---- 上下文：短期窗口 + 总结指针 + 滚动前情提要（仿酒馆） ---- */
+function ctxParams(char) {
+  var W = char.contextLimit > 0 ? char.contextLimit : (Number(settings.ctxWindow) > 0 ? Number(settings.ctxWindow) : 25);
+  var am = char.autoMemory || {}, S = am.step > 0 ? am.step : (Number(settings.ctxStep) > 0 ? Number(settings.ctxStep) : 10);
+  return { W: Math.max(2, Math.floor(W)), S: Math.max(1, Math.floor(S)), auto: !!am.enabled };
+}
+/* 要带进提示词的记忆：有「前情提要」→ 常驻 + 手写记忆 + 前情提要（旧的逐条总结已并进提要，不再带）；还没有 → 沿用旧的三层 */
+function injectMemories(mems, queryTexts, windowSize) {
+  var byTs = function (a, b) { return a.ts - b.ts; }, roll = null, tags = {};
+  mems.forEach(function (m) { if (m.roll && (!roll || m.ts > roll.ts)) roll = m; });
+  if (!roll) {
+    var sel = selectMemories(mems, queryTexts, windowSize);
+    sel.core.forEach(function (m) { tags[m.id] = '常驻'; }); sel.recent.forEach(function (m) { tags[m.id] = '近期'; });
+    return { memories: sel.all, roll: '', hasRoll: false, tags: tags };
+  }
+  var core = mems.filter(function (m) { return !m.roll && m.core; }).sort(byTs);
+  var notes = mems.filter(function (m) { return !m.roll && !m.core && m.kind === 'note'; }).sort(byTs).slice(-12);
+  var late = mems.filter(function (m) { return !m.roll && !m.core && m.kind !== 'note' && m.ts > (roll.upTo || 0); }).sort(byTs).slice(-(windowSize > 0 ? windowSize : 20));
+  core.forEach(function (m) { tags[m.id] = '常驻'; }); notes.forEach(function (m) { tags[m.id] = '常驻'; }); late.forEach(function (m) { tags[m.id] = '近期'; }); tags[roll.id] = '前情提要';
+  return { memories: core.concat(notes, late), roll: roll.content || '', hasRoll: true, tags: tags };
+}
+
 function fmtGap(ms) {
   var m = Math.round(ms / 60000); if (m < 60) return m + ' 分钟';
   var hh = Math.floor(m / 60); if (hh < 24) return hh + ' 小时' + (m % 60 ? ' ' + (m % 60) + ' 分钟' : '');
@@ -214,7 +236,7 @@ function fmtTime(ts, tz) {
 }
 
 function buildSystem(ctx) {
-  var c = ctx.char, s = ctx.settings, L = [];
+  var c = ctx.char, s = ctx.settings, L = [], D = !!ctx.depth;   /* D：易变的背景（世界书/心声/时间/听歌/手机动态…）不放这里，放到 buildDepth 里紧贴最新消息 */
   L.push('你正在扮演「' + (c.realName || c.name) + '」，' + (c.offlineMode ? '和用户面对面相处。' : '通过手机和用户聊天。'));
   L.push('# 角色在线状态\n每次回复结束时，额外输出一段状态标记，必须严格使用以下格式：<状态>{"type":"online","text":"刚刚在和你聊天"}</状态>\n状态类型只能从 online、busy、away、sleeping 中选择：online 表示在线，busy 表示忙碌，away 表示暂时离开，sleeping 表示睡眠。text 由你根据当前情绪、活动、剧情和角色设定自由编写，简短自然，最多 16 个字。状态类型不必每次改变，只有符合当前情境时才切换。状态标记必须放在整条回复的最后，不要放进聊天正文，也不要向用户解释这个标记。');
   if (c.persona) L.push('# 角色设定\n' + c.persona);
@@ -222,22 +244,24 @@ function buildSystem(ctx) {
   if (c.userNickname) me.push('你称呼用户为：' + c.userNickname);
   if (c.userPersona) me.push(c.userPersona);
   if (me.length) L.push('# 用户\n' + me.join('\n'));
-  if (ctx.entries.length) {
+  if (!D && ctx.entries.length) {
     L.push('# 世界书（当前相关的设定）\n' + ctx.entries.map(function (e) {
       return '【' + (e.title || e.book) + '】\n' + e.content;
     }).join('\n\n'));
   }
   if (ctx.memories.length) {
-    L.push('# 长期记忆（你们之前发生的事，按时间从早到晚）\n' + ctx.memories.map(function (m) { return '- ' + m.content; }).join('\n'));
+    L.push('# 长期记忆（' + (ctx.roll ? '重要且一直成立的事' : '你们之前发生的事，按时间从早到晚') + '）\n' + ctx.memories.map(function (m) { return '- ' + m.content; }).join('\n'));
   }
-  if (!c.offlineMode && ctx.stickers && ctx.stickers.length) {
+  if (ctx.roll) L.push('# 前情提要（更早的聊天已经总结成下面这段话；之后发生的原话在下面的聊天记录里）\n' + ctx.roll);
+  if (!D && !c.offlineMode && ctx.stickers && ctx.stickers.length) {
     L.push('# 可发送的表情包\n想发表情包时，单独占一行，写成 [表情包：名称]，名称必须从下面选一个，不要自己编：\n' +
       ctx.stickers.map(function (st) { return st.name; }).join('、'));
   }
-  if (ctx.thought) {
+  if (!D && ctx.thought) {
     L.push('# 你此刻的内心（只有你自己知道，不要直接念出来，但要让言行和它保持一致）\n心声：' + ctx.thought.heartfeltVoice + (ctx.thought.randomJottings ? '\n散记：' + ctx.thought.randomJottings : ''));
   }
-  if (c.timeAware !== false) {
+  if (D && c.timeAware !== false) L.push('# 时间感\n对话里「[间隔 …]」是两条消息之间隔了多久，仅供你感知时间，不要念出来。当前时间会放在最新消息前面的「背景资料」里。');
+  else if (c.timeAware !== false) {
     var tl = '# 当前时间\n' + fmtTime(ctx.now, c.timeZone) + '（' + weekPart(ctx.now, c.timeZone) + '）';
     if (ctx.gap > 10 * 60 * 1000) tl += '\n距离你上一次回复已经过去了 ' + fmtGap(ctx.gap) + '。请按这个时间感来说话（比如隔了很久会问候、半夜会说该睡了、饭点会提吃饭），自然就好，不要机械地报时。';
     tl += '\n对话里「[间隔 …]」是两条消息之间隔了多久，仅供你感知时间，不要念出来。';
@@ -247,15 +271,36 @@ function buildSystem(ctx) {
   if (ctx.wantThought) L.push('# 心声（附加输出）\n' + THOUGHT_RULES);
   if (ctx.musicText) L.push(ctx.musicText);
   if (!c.offlineMode) L.push('# 拍一拍与转账\n' + ACT_RULES);
-  if (ctx.periodText) L.push(ctx.periodText);
-  if (ctx.watchText) L.push(PW_RULES + ctx.watchText);
-  if (ctx.momentsText) L.push(ctx.momentsText + '\n\n# 朋友圈（附加输出）\n' + MOMENT_RULES);
+  if (!D && ctx.periodText) L.push(ctx.periodText);
+  if (!D && ctx.watchText) L.push(PW_RULES + ctx.watchText);
+  if (!D && ctx.momentsText) L.push(ctx.momentsText + '\n\n# 朋友圈（附加输出）\n' + MOMENT_RULES);
   if (ctx.changes) L.push('# 消息的变动\n用户有时会撤回、删除或编辑消息。方括号里的「[用户撤回了一条消息。撤回前的内容：…]」「[用户删除了…]」和消息后面的「（…原文是…）」就是你看到的变动，你确实知道原来写了什么。像真人一样自然地反应（好奇、调侃、装作没看见都行，看角色性格），不要机械复述这些提示，也不要每次都点破。');
   if (c.aiVoice && !c.offlineMode) L.push('# 发语音\n想发语音消息时，把那一条单独写成一行：[语音：说的话]。方括号里就是语音里说的原话（口语、带语气词），会自动显示成文字，不用再重复。偶尔用，适合轻声说话、撒娇、叹气、情绪起伏的时候；每次回复最多 1 条（多发会被语音接口限流）。\n语音文字里要自然穿插声音表情标签，必须从下面的词表里原样选用，严禁自造：' + TTS_TAGS.map(function (x) { return '[' + x + ']'; }).join('、') + '。\n示例：[语音：[轻笑]你怎么才回我呀，[叹气]我等了好久。]');
   if (ctx.dictate) L.push('# 听写（必须）\n用户发来的 ' + ctx.dictate + ' 条语音还没有文字。请在回复的最最开头，按语音出现的顺序，每条语音写一段 <听写>用户语音里说的原话</听写>（逐字写，不翻译、不润色；完全听不清就写 听不清）。写完标签再正常回复；标签里的字不要在正文里重复，标签本身用户看不到。');
   if (ctx.voice === 'audio') L.push('# 语音消息\n用户的语音会直接以音频发给你（标着「[用户发来一条语音…]」的那条）：请真的去听——语气、情绪、语速、停顿、背景声音，再自然地回应。不要念出「语气」「音频」这类词，也不要复述括号里的提示。历史里更早的语音只剩文字。听不清就坦白说没听清。');
   else if (ctx.voice) L.push('# 语音消息\n用户发来的「[语音 N秒，语气：…] 文字」是语音消息：方括号里是时长和语气提示（根据音量、语速、停顿粗略估计的，仅供参考），后面才是说的内容。请结合语气和内容自然回应，不要把方括号里的提示原样复述。如果写着「没有转成文字」，就说你没听清，让对方再说一遍或打字。');
   return L.join('\n\n');
+}
+
+/* 深度注入：易变的背景资料，作为独立的一条消息插在聊天记录最后一条之前（不拼进用户的话） */
+function buildDepth(ctx) {
+  var c = ctx.char, L = [], off = !!c.offlineMode;
+  if (c.timeAware !== false) {
+    var tl = '当前时间：' + fmtTime(ctx.now, c.timeZone) + '（' + weekPart(ctx.now, c.timeZone) + '）';
+    if (ctx.gap > 10 * 60 * 1000) tl += '。距离你上一次回复已经过去了 ' + fmtGap(ctx.gap) + '，按这个时间感自然地说话（隔很久会问候、半夜会说该睡了），不要机械报时';
+    L.push(tl);
+  }
+  if (ctx.thought) L.push('你此刻的内心（只有你自己知道，不要念出来，但言行要和它一致）：心声：' + ctx.thought.heartfeltVoice + (ctx.thought.randomJottings ? '；散记：' + ctx.thought.randomJottings : ''));
+  if (ctx.musicState) L.push(ctx.musicState);
+  if (ctx.periodText) L.push(ctx.periodText);
+  if (ctx.watchText) L.push(PW_RULES + ctx.watchText);
+  if (ctx.momentsText) L.push(ctx.momentsText + '\n\n# 朋友圈（附加输出）\n' + MOMENT_RULES);
+  if (ctx.entries && ctx.entries.length) L.push('相关设定（世界书，当前触发的条目）：\n' + ctx.entries.map(function (e) { return '【' + (e.title || e.book) + '】\n' + e.content; }).join('\n\n'));
+  if (!off && ctx.stickers && ctx.stickers.length) L.push('可发送的表情包（想发就单独一行写 [表情包：名称]，名称只能从这里选，不要自己编）：' + ctx.stickers.map(function (st) { return st.name; }).join('、'));
+  var tail = off ? '先回应用户最新的一条消息，再按写作要求展开。'
+    : '格式提醒：每条消息单独一行，最多 20 条；先回应用户最新的一条消息，再说别的；引用某句话写 [引用：原话片段]你的回复；' + (c.aiVoice ? '语音单独一行写 [语音：说的话]（每次最多 1 条）；' : '') + '表情包写 [表情包：名称]；不要输出 JSON。';
+  if (!L.length) return tail;
+  return '【背景资料——只有你知道，不是聊天内容。除非和用户正在聊的话题有关，否则不要提起，更不要复述这些提示。】\n' + L.join('\n\n') + '\n\n' + tail;
 }
 
 /* 表情包：从角色选中的分类里挑出可用的；太多时随机抽 limit 个，避免提示词过长 */
@@ -278,6 +323,7 @@ function findSticker(pool, name) {
 /* 模型回复的每一行 -> 消息草稿（文字或表情包） */
 function estSpeakSecs(t) { var n = stripVoiceTags(t).replace(/\s/g, '').length; return Math.max(1, Math.round(n / 4.5)); }
 var RE_VOICE_OPEN = /^[\[【［]\s*(?:语音|语音消息|voice_message|voice)\s*[:：]?\s*/i, RE_QUOTE = /^[\[【［]\s*(?:引用|引用回复|quote_reply|quote)\s*[:：]\s*([\s\S]+?)\s*[\]】］]\s*([\s\S]*)$/i;
+var RE_QUOTE2 = /^[（(]\s*回复\s*[「『"“]([\s\S]+?)[」』"”]\s*[）)]\s*([\s\S]*)$/;   /* 模型仿写历史里旧格式「（回复「…」）正文」时也认 */
 function parseReplyLines(lines, pool, voiceOn) {
   var out = [], voices = 0, pendQ = null;
   lines.forEach(function (ln) {
@@ -287,7 +333,7 @@ function parseReplyLines(lines, pool, voiceOn) {
       if (st) out.push({ type: 'sticker', content: st.url, meta: { meaning: st.name } });
       return; // 找不到对应表情包就丢掉这一行
     }
-    var q = ln.match(RE_QUOTE), quote = null;
+    var q = ln.match(RE_QUOTE) || ln.match(RE_QUOTE2), quote = null;
     if (q) { if (!q[2]) { pendQ = q[1]; return; } quote = q[1]; ln = q[2]; }   /* 引用单独占一行：套到下一条文字上 */
     else if (pendQ) { quote = pendQ; pendQ = null; }
     /* 语音：认 [语音：…] / 【语音:…】/ [语音]… / 没写右括号；每轮只留第一条，多出来的当普通文字 */
@@ -337,13 +383,13 @@ function msgToTextBase(m) {
       var vd = (meta.duration ? meta.duration + '秒' : ''), vt = meta.tone ? '，语气：' + meta.tone : '';
       return c ? '[语音 ' + vd + vt + '] ' + c : '[语音 ' + vd + '，没有转成文字，听不清内容]';
     }
-    return '[语音] ' + c;
+    return '[语音：' + c + ']';
   }
   if (t === 'recalled') { var og = meta.orig && meta.orig.desc; return og ? '[用户撤回了一条消息。撤回前的内容：「' + String(og).slice(0, 200) + '」]' : '[用户撤回了一条消息]'; }
   if (t === 'pat' || t === 'system') return c.charAt(0) === '[' ? c : '[系统提示：' + c + ']';
   if (meta.quote && typeof meta.quote === 'object') {
     var q = meta.quote.content || meta.quote.text || '';
-    if (q) return '（回复「' + String(q).slice(0, 60) + '」）' + c;
+    if (q) return '[引用：' + String(q).slice(0, 60).replace(/[\[\]［］【】]/g, '') + ']' + c;   /* 和要求模型输出的格式完全一致，模型才不会仿写成别的样子 */
   }
   return c;
 }
@@ -461,6 +507,7 @@ async function callLLMRaw(o) {
     var root = String(o.base).trim().replace(/\/+$/, '').replace(/\/v1(beta)?(\/models)?$/, '');
     url = root + '/v1beta/models/' + encodeURIComponent(o.model) + (o.stream ? ':streamGenerateContent?alt=sse&' : ':generateContent?') + 'key=' + encodeURIComponent(o.key || '');
     var contents = o.messages.map(function (m) { return { role: m.role === 'assistant' ? 'model' : 'user', parts: geminiParts(m.content) }; });
+    contents = contents.reduce(function (acc, c0) { var lst = acc[acc.length - 1]; if (lst && lst.role === c0.role) lst.parts = lst.parts.concat(c0.parts); else acc.push(c0); return acc; }, []);   /* 深度注入的背景消息在 Gemini 里是 user 角色：相邻同角色合并成一轮，避免「必须交替」报错 */
     if (!contents.length || contents[0].role !== 'user') contents.unshift({ role: 'user', parts: [{ text: '（开始）' }] });
     body = { systemInstruction: { parts: [{ text: o.system }] }, contents: contents, generationConfig: { temperature: o.temperature } };
   } else {
@@ -544,12 +591,13 @@ function secondaryApi() {
     model: settings.secModel || settings.model
   };
 }
-async function summarizeMessages(char, msgs) {
-  var api = secondaryApi(), max = Number(settings.summaryMax) > 30 ? Number(settings.summaryMax) : 200;
-  var system = '你是「' + (char.realName || char.name) + '」。请站在你自己的角度，用第一人称（“我”）把下面这段聊天记录总结成一条记忆。' +
-    '保留关键事实、约定、情绪变化和称呼变化，忽略寒暄和重复内容。严格控制在 ' + max + ' 字以内（越短越好），不要分点、不要标题、不要解释，只输出一段总结正文。';
+async function summarizeMessages(char, msgs, prev) {
+  var api = secondaryApi(), max = Number(settings.rollMax) > 100 ? Number(settings.rollMax) : 600;
+  var system = '你是「' + (char.realName || char.name) + '」。请站在你自己的角度，用第一人称（“我”）维护一份「前情提要」。下面会先给出【已有前情提要】（可能为空），再给出【新发生的聊天记录】。' +
+    '请把新内容并进去，输出更新后的完整前情提要：保留关键事实、约定、称呼、关系和情绪变化，合并重复内容，删掉寒暄和琐碎细节，越早的内容越概括。严格控制在 ' + max + ' 字以内，不要分点、不要标题、不要解释，只输出提要正文。';
   var out = (await callLLM({ base: api.base, key: api.key, model: api.model, temperature: 0.5, system: system,
-    messages: [{ role: 'user', content: transcript(msgs, char) }], stream: false })).trim();
+    messages: [{ role: 'user', content: '【已有前情提要】\n' + (prev || '（空）') + '\n\n【新发生的聊天记录】\n' + transcript(msgs, char) }], stream: false })).trim();
+  if (!out) throw new Error('总结返回了空内容');
   /* 模型写超字数也不再追加请求压缩：总结永远只请求 1 次（字数上限只写在提示词里） */
   return out;
 }
@@ -616,7 +664,7 @@ function extractMoments(text) {
 }
 
 /* 导出给测试用 */
-if (typeof module !== 'undefined') module.exports = { extractMusicCmd: extractMusicCmd, extractMoments: extractMoments, extractThought: extractThought, offlineRules: offlineRules, selectMemories: selectMemories, triggeredEntries: triggeredEntries, pickMemories: pickMemories, buildSystem: buildSystem, msgToText: msgToText, toApiMessages: toApiMessages, splitReply: splitReply, parseThought: parseThought, openaiUrl: openaiUrl, stickerPool: stickerPool, sampleStickers: sampleStickers, parseReplyLines: parseReplyLines, findSticker: findSticker };
+if (typeof module !== 'undefined') module.exports = { extractMusicCmd: extractMusicCmd, extractMoments: extractMoments, extractThought: extractThought, offlineRules: offlineRules, selectMemories: selectMemories, triggeredEntries: triggeredEntries, pickMemories: pickMemories, buildSystem: buildSystem, buildDepth: buildDepth, injectMemories: injectMemories, ctxParams: ctxParams, muRulesText: muRulesText, muStateText: muStateText, msgToText: msgToText, toApiMessages: toApiMessages, splitReply: splitReply, parseThought: parseThought, openaiUrl: openaiUrl, stickerPool: stickerPool, sampleStickers: sampleStickers, parseReplyLines: parseReplyLines, findSticker: findSticker };
 
 /* ---------- ⑤ 界面 ---------- */
 var $ = function (id) { return document.getElementById(id); };
@@ -1514,9 +1562,15 @@ var trChain = Promise.resolve();
 function queueTranslate(m, host, foot, cfg) {
   trChain = trChain.then(function () { return translateMsg(m, host, foot, cfg); }).then(function () { return sleep(120); });
 }
+function trSame(a, b) { var n = function (x) { return String(x || '').replace(/[\s\u3000，。,.!！?？、…~～"“”'‘’《》「」『』（）()\-—:：;；]/g, '').toLowerCase(); }; return n(a) === n(b); }
 async function translateMsg(m, host, foot, cfg, el) {
   try {
     var res = await freeTranslate(m.content, cfg.from, cfg.to);
+    if (trSame(res, m.content)) {   /* 译文和原文一样（比如中英混写的中文）：不显示，也记下来别再翻 */
+      if (el) el.remove();
+      try { var f0 = await dbGet('messages', m.id); if (f0 && f0.content === m.content) { f0.meta = f0.meta || {}; f0.meta.tr = { to: cfg.to, src: m.content, text: res, same: true }; await dbPut('messages', f0); m.meta = f0.meta; } } catch (e0) {}
+      return;
+    }
     if (!el) { el = h('div', { class: 'trans' }); host.insertBefore(el, foot && foot.parentNode === host ? foot : null); }
     el.className = 'trans'; el.textContent = res; el.onclick = null;
     var fresh = await dbGet('messages', m.id);
@@ -1533,7 +1587,7 @@ function addTrans(m, b, foot) {
   var cfg = cur && cur.translate; if (!cfg || !cfg.on || m.role !== 'assistant') return;
   var t = m.type || 'text'; if (!(t === 'text' || t === 'offline' || (t === 'voice' && m.content)) || !m.content) return;
   var tr = m.meta && m.meta.tr;
-  if (tr && tr.to === cfg.to && tr.src === m.content) { b.insertBefore(h('div', { class: 'trans', text: tr.text }), foot || null); return; }
+  if (tr && tr.to === cfg.to && tr.src === m.content) { if (tr.same || trSame(tr.text, m.content)) return; b.insertBefore(h('div', { class: 'trans', text: tr.text }), foot || null); return; }
   if (!needTranslate(m.content, cfg)) return;
   queueTranslate(m, b, foot, cfg);
 }
@@ -1761,9 +1815,34 @@ $('composer').addEventListener('submit', async function (e) {
   await dbPut('messages', m);
   var n = msgNode(m); if (lastShownTs && m.ts - lastShownTs > 600000) appendMsgNode(h('div', { class: 'sysline', text: fmtTime(m.ts).replace(/:\d\d$/, '') }));
   if (n) appendMsgNode(n); lastShownTs = m.ts; scrollBottom();
+  setTimeout(scrollBottom, 120); setTimeout(scrollBottom, 380);   /* 键盘/布局变化后再滚一次 */
   if (settings.autoReply) generateReply(); // 默认只发送，不回复：要你点「等回复」才会回
 });
 $('b-wait').onclick = function () { generateReply(); };
+/* 安卓 WebView：没挂在页面上的 <input type=file> 点了不一定能弹出选择器，选完事件也可能丢。统一在 click 时临时挂到页面上 */
+(function () {
+  var oc = HTMLInputElement.prototype.click;
+  HTMLInputElement.prototype.click = function () {
+    var el = this;
+    if (el.type === 'file' && !el.isConnected && document.body) {
+      el.style.cssText = 'position:fixed;left:-9999px;top:0;width:1px;height:1px;opacity:0;pointer-events:none';
+      document.body.appendChild(el);
+      var rm = function () { setTimeout(function () { if (el.parentNode) el.remove(); }, 400); };
+      el.addEventListener('change', rm); el.addEventListener('cancel', rm);
+      setTimeout(function () { if (el.parentNode) el.remove(); }, 600000);
+    }
+    return oc.apply(this, arguments);
+  };
+})();
+/* 键盘弹出/收起会改变页面高度：点输入框、发送、视口变化后都再滚到最新消息 */
+(function () {
+  var inp = $('input');
+  function keepBottom() { if (cur && s_chatActive()) { var m = $('msgs'); m.scrollTop = m.scrollHeight; pinUntil = Math.max(pinUntil, Date.now() + 1500); } }
+  inp.addEventListener('focus', function () { [0, 120, 300, 600].forEach(function (t) { setTimeout(keepBottom, t); }); });
+  function onVp() { if (document.activeElement === inp || Date.now() < pinUntil) keepBottom(); }
+  if (window.visualViewport) window.visualViewport.addEventListener('resize', onVp);
+  window.addEventListener('resize', onVp);
+})();
 
 /* ---- 图片：压缩 / 灯箱 / 从相册发送 ---- */
 /* 压缩：长边不超过 maxDim。o.alpha=true 保留透明（输出 webp/png），否则输出 jpeg。返回 { url, w, h } */
@@ -1861,7 +1940,7 @@ function asrLang() { return settings.asrLang || 'zh-CN'; }
 function fmtDur(s) { return Math.max(1, Math.round(s || 0)) + '″'; }
 var vAudio = null, vBtn = null;
 var vCtxSrc = null;
-function stopCtxVoice() { if (vCtxSrc) { try { vCtxSrc.onended = null; vCtxSrc.stop(); } catch (e) {} vCtxSrc = null; } }
+function stopCtxVoice() { if (vCtxSrc) { var oldSrc = vCtxSrc; try { vCtxSrc.onended = null; vCtxSrc.stop(); } catch (e) {} vCtxSrc = null; muRelease(oldSrc); } }
 /* <audio> 播不了时，退一步：自己解码再用 WebAudio 播 */
 async function playViaContext(src, btn) {
   var AC = window.AudioContext || window.webkitAudioContext, ac = new AC();
@@ -1869,8 +1948,8 @@ async function playViaContext(src, btn) {
   var u8; if (mm) { var bin = atob(mm[1]); u8 = new Uint8Array(bin.length); for (var i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i); } else u8 = new Uint8Array(await (await fetch(src)).arrayBuffer());
   var buf = await new Promise(function (res, rej) { var p = ac.decodeAudioData(u8.buffer, res, rej); if (p && p.catch) p.catch(rej); });
   stopCtxVoice(); var node = ac.createBufferSource(); node.buffer = buf; node.connect(ac.destination);
-  node.onended = function () { btn.textContent = '▶'; try { ac.close(); } catch (e) {} if (vCtxSrc === node) vCtxSrc = null; };
-  vCtxSrc = node; vBtn = btn; btn.textContent = '⏸'; node.start();
+  node.onended = function () { btn.textContent = '▶'; try { ac.close(); } catch (e) {} if (vCtxSrc === node) vCtxSrc = null; muRelease(node); };
+  muHold(node); vCtxSrc = node; vBtn = btn; btn.textContent = '⏸'; node.start();
 }
 function toggleVoice(btn, src) {
   if (vCtxSrc && vBtn === btn) { stopCtxVoice(); btn.textContent = '▶'; return; }
@@ -1979,7 +2058,9 @@ async function openVoiceRecorder() {
   var pop = h('div', { class: 'voice-pop' }, h('div', { class: 'voice-card' }, h('div', { class: 'vrec' }, h('span', { class: 'dot' }), '正在录音'), timeEl, h('div', { class: 'vlevel' }, lvl), live, h('div', { class: 'btn-row' }, cancelBtn, sendBtn)));
   document.body.appendChild(pop);
   function stopRec() { return new Promise(function (res) { if (rec.state === 'inactive') return res(); rec.onstop = res; try { rec.stop(); } catch (e) { res(); } }); }
+  muHold(rec);   /* 录音时先把歌暂停，免得录进去 */
   function cleanup() {
+    muRelease(rec);
     clearInterval(timer);
     try { if (rc) { rc.onend = null; rc.abort(); } } catch (e) {}
     try { if (rec.state !== 'inactive') rec.stop(); } catch (e) {}
@@ -2503,8 +2584,11 @@ async function audioToWavB64(dataUri) {
 }
 /* 组装提示词 */
 async function buildPrompt(char) {
-  var limit = char.contextLimit > 0 ? char.contextLimit : settings.defaultContext;
-  var history = await pageMessages(char.id, null, limit);
+  var P = ctxParams(char), ptr = char.lastSummaryTs || 0;
+  var recentRows = await pageMessages(char.id, null, P.W + P.S);
+  /* 开了自动总结：带「总结指针」之后的全部原话（最多 窗口+步长 条）；没开：只带最近 窗口 条 */
+  var history = P.auto ? recentRows.filter(function (m) { return m.ts > ptr; }) : recentRows.slice(-P.W);
+  if (P.auto && history.length < Math.min(P.W, recentRows.length)) history = recentRows.slice(-P.W);
   var lastAi = -1; history.forEach(function (m, i) { if (m.role === 'assistant' && !m.hidden && m.type !== 'pat' && m.type !== 'system') lastAi = i; });
   var wavs = {}, audioUsed = false, dictIds = [];
   if ((settings.voiceSend || 'audio') === 'audio') {
@@ -2523,7 +2607,7 @@ async function buildPrompt(char) {
   var allBooks = await dbAll('worldBooks');
   var books = allBooks.filter(function (b) { return (char.worldBookIds || []).indexOf(b.id) !== -1; });
   var entries = triggeredEntries(books, scan, settings.worldBookMaxChars);
-  var mems = selectMemories(await dbByIndex('memories', 'byChar', char.id), history.slice(-4).map(msgToText), settings.memoryLimit).all;
+  var inj = injectMemories(await dbByIndex('memories', 'byChar', char.id), history.slice(-4).map(msgToText), settings.memoryLimit), mems = inj.memories;
   var thought = null;
   if (char.injectThought) {
     var th = (await dbAllWithKeys('thoughts')).map(function (r) { return r.value; }).filter(function (t) { return t.characterId === char.id; }).sort(function (a, b) { return b.ts - a.ts; })[0];
@@ -2546,8 +2630,17 @@ async function buildPrompt(char) {
   var muCtx = await muPromptCtx(char);   /* 一起听：只有绑定了这个角色才有 */
   var pool = stickerPool(await dbAll('stickers'), char.stickerCategoryIds);
   var shown = sampleStickers(pool, settings.stickerPromptLimit);
-  var system = buildSystem({ gap: gap, char: char, settings: settings, entries: entries, memories: mems, stickers: shown, thought: thought, preset: preset, wantThought: wantThought, momentsText: moCtx ? moCtx.text : '', periodText: char.periodOn ? periodPromptText() : '', watchText: pwCtx ? pwCtx.text : '', musicText: muCtx ? muPromptText(muCtx) : '', voice: audioUsed ? 'audio' : hasVoice, dictate: dictIds.length, changes: changes, now: Date.now() });
-  return { system: system, watchTs: pwCtx ? pwCtx.ts : 0, messages: apiMsgs, pool: pool, wantThought: wantThought, momentIds: moCtx ? moCtx.ids : null, musicOn: !!muCtx, dictIds: dictIds, stats: { history: history.length, entries: entries.length, memories: mems.length, stickers: shown.length } };
+  var sctx = { gap: gap, char: char, settings: settings, entries: entries, memories: mems, roll: inj.roll, stickers: shown, thought: thought, preset: preset, wantThought: wantThought, momentsText: moCtx ? moCtx.text : '', periodText: char.periodOn ? periodPromptText() : '', watchText: pwCtx ? pwCtx.text : '', musicText: muCtx ? muRulesText(muCtx) : '', musicState: muCtx ? muStateText(muCtx) : '', voice: audioUsed ? 'audio' : hasVoice, dictate: dictIds.length, changes: changes, now: Date.now(), depth: true };
+  var system = buildSystem(sctx), depthText = buildDepth(sctx);
+  /* 最后一条是角色自己的话（用户没发新消息就点了「等回复」）：补一句提示，别让模型把自己上一条「续写」成不连贯的新内容 */
+  if (apiMsgs.length && apiMsgs[apiMsgs.length - 1].role === 'assistant') apiMsgs.push({ role: 'user', content: '[系统提示：用户这会儿没有发新消息。你可以自然地主动聊一句，或接着刚才的话题往下说；不要重复你上一条说过的话。]' });
+  /* 深度注入：背景资料作为独立一条消息，插在最后一条消息之前（倒数第 2 位）；不拼进用户的话。个别中转不认中间的 system 消息时，设置里可改成 user 角色 */
+  var depthIdx = -1;
+  if (depthText) {
+    depthIdx = Math.max(0, apiMsgs.length - 1);
+    apiMsgs.splice(depthIdx, 0, settings.depthRole === 'user' ? { role: 'user', content: '[系统备忘，不是用户说的话]\n' + depthText } : { role: 'system', content: depthText });
+  }
+  return { system: system, depthText: depthText, depthIdx: depthIdx, watchTs: pwCtx ? pwCtx.ts : 0, messages: apiMsgs, pool: pool, wantThought: wantThought, momentIds: moCtx ? moCtx.ids : null, musicOn: !!muCtx, dictIds: dictIds, stats: { history: history.length, entries: entries.length, memories: mems.length, stickers: shown.length, roll: inj.roll ? inj.roll.length : 0 } };
 }
 
 /* 点「等回复」= 发一次请求。按钮永远可点：后台慢时可以再点一次，
@@ -2591,7 +2684,7 @@ async function generateReply(fresh) {
     var mo = extractMoments(ac.reply);   /* 朋友圈互动也随回复一起回来 */
     var st = extractStatus(mo.reply);
     var ex = extractThought(st.reply), replyText = ex.reply;   /* 心声同理 */
-    var items = char.offlineMode ? (replyText.trim() ? [{ type: 'offline', content: replyText.trim() }] : []) : parseReplyLines(splitReply(jsonReplyToLines(replyText) || replyText, 50), prompt.pool, !char.offlineMode), base = Date.now(), saved = [];
+    var items = char.offlineMode ? (replyText.trim() ? [{ type: 'offline', content: replyText.trim() }] : []) : parseReplyLines(splitReply(jsonReplyToLines(replyText) || replyText, 20), prompt.pool, !char.offlineMode), base = Date.now(), saved = [];
     if (!items.length && !ac.acts.length) throw new Error('模型的回复里没有可显示的内容（只有找不到的表情包）。原始回复：' + text.slice(0, 200));
     r.won = true;
     var actItems = ac.acts.length ? await applyActs(char, ac.acts) : [];
@@ -2699,7 +2792,7 @@ async function clearChat() {
 function notifySrc() { return notifyFile || settings.notifyUrl || ''; }
 function playNotify() {
   if (document.hidden) return;   /* 页面在后台/锁屏时不放前端提示音，铃声交给系统通知（见 sysNotify） */
-  try { var src = notifySrc(); if (!src) return; var a = new Audio(src); a.play().catch(function () {}); } catch (e) {}
+  try { var src = notifySrc(); if (!src) return; var a = new Audio(src); a.__skip = 1; a.play().catch(function () {}); } catch (e) {}
 }
 var unread = {};   /* { 角色id: 未读条数 }，存在 settings 仓库的 unread 项里，刷新页面也在 */
 async function loadUnread() { try { var r = await dbGet('settings', 'unread'); unread = (r && r.value) || {}; } catch (e) { unread = {}; } }
@@ -2957,16 +3050,15 @@ async function renderMemory() {
   if (!cur) return;
   $('mem-title').textContent = cur.name + ' · 记忆';
   var mems = (await dbByIndex('memories', 'byChar', cur.id)).sort(function (a, b) { return b.ts - a.ts; });
-  var layer = selectMemories(mems, [], settings.memoryLimit), injected = {};
-  layer.core.forEach(function (m) { injected[m.id] = '常驻'; }); layer.recent.forEach(function (m) { injected[m.id] = '近期'; });
+  var inj = injectMemories(mems, [], settings.memoryLimit), injected = inj.tags;
   var body = $('mem-body'); body.innerHTML = '';
-  body.appendChild(h('div', { class: 'group-title', text: '三层记忆：「常驻」和最近 ' + settings.memoryLimit + ' 条（近期）每次都带；更早的历史记忆只有聊天里出现相关关键词时才带入。共 ' + mems.length + ' 条' }));
+  body.appendChild(h('div', { class: 'group-title', text: (inj.hasRoll ? '「前情提要」（自动滚动更新的一段总结）和「常驻」记忆每次都带；之前逐条的旧总结已经并进前情提要，不再带入。共 ' + mems.length + ' 条' : '「常驻」和最近 ' + settings.memoryLimit + ' 条（近期）每次都带；更早的历史记忆只有聊天里出现相关关键词时才带入。第一次自动总结后会合并成一段「前情提要」。共 ' + mems.length + ' 条') }));
   if (!mems.length) { body.appendChild(h('div', { class: 'empty', text: '还没有记忆。点「总结」手动生成，或在角色设置里开启自动总结。' })); return; }
   var g = h('div', { class: 'group' });
   mems.forEach(function (m) {
     g.appendChild(h('div', { class: 'item', onclick: function () { editMemory(m); } },
       h('div', { class: 't' }, h('b', { text: fmtTime(m.ts).replace(/:\d\d$/, '') }),
-        h('span', { class: 'badge' + (m.kind === 'refined' ? ' acc' : ''), text: KIND[m.kind] || m.kind }),
+        h('span', { class: 'badge' + (m.kind === 'refined' ? ' acc' : ''), text: m.roll ? '前情提要' : (KIND[m.kind] || m.kind) }),
         injected[m.id] ? h('span', { class: 'badge on', text: injected[m.id] }) : null),
       h('div', { class: 'c', text: m.content })));
   });
@@ -2990,16 +3082,33 @@ $('b-mem-add').onclick = function () {
     '普通记忆在聊天里出现相关关键词时才会带入；「常驻」的记忆每次都带（适合核心设定和底线规则）。');
 };
 var sumBusy = {}, sumBlocked = {};   /* sumBusy：同一角色同时只允许 1 个总结请求；sumBlocked：自动总结失败后暂停，等你点「重试」 */
-async function summarizeNow(char, silent) {
+/* 要总结的原话：总结指针之后、且已经溢出「短期窗口」的那些（最近 W 条留在窗口里，不总结） */
+async function sumCandidates(char) {
+  var P = ctxParams(char), ptr = char.lastSummaryTs || 0;
+  var all = (await pageMessages(char.id, null, 300)).filter(function (m) { return m.ts > ptr && !m.hidden && m.type !== 'system' && m.type !== 'pat'; });
+  return { P: P, all: all, older: all.slice(0, Math.max(0, all.length - P.W)) };
+}
+async function summarizeNow(char, silent, force) {
   if (sumBusy[char.id]) { if (!silent) toast('正在总结中，请稍等'); return false; }
   sumBusy[char.id] = true;
   try {
-    var since = char.lastSummaryTs || 0;
-    var recent = (await pageMessages(char.id, null, 120)).filter(function (m) { return m.ts > since && !m.hidden && m.type !== 'system'; });
-    if (recent.length < 2) { if (!silent) toast('没有需要总结的新消息'); return false; }
-    var text = await summarizeMessages(char, recent);   /* 只请求这 1 次 */
-    await dbPut('memories', { id: uid('mem'), characterId: char.id, content: text, ts: Date.now(), kind: 'summary' });
-    char.lastSummaryTs = recent[recent.length - 1].ts; await dbPut('characters', char);
+    var c0 = await sumCandidates(char);
+    if (c0.older.length < (force ? 1 : c0.P.S)) { if (!silent) toast('最近的消息都还在短期窗口里，暂时不用总结'); return false; }
+    var batch = c0.older.slice(0, 60);   /* 一次最多归纳 60 条，积压多了会分几次追上 */
+    var mems = await dbByIndex('memories', 'byChar', char.id), roll = null;
+    mems.forEach(function (m) { if (m.roll && (!roll || m.ts > roll.ts)) roll = m; });
+    var prev = '', upTo = 0;
+    if (roll) prev = roll.content || '';
+    else {   /* 第一次：把旧的逐条总结当作已有前情提要，一并并进去 */
+      var legacy = mems.filter(function (m) { return !m.roll && !m.core && m.kind !== 'note'; }).sort(function (a, b) { return a.ts - b.ts; });
+      prev = legacy.map(function (m) { return '- ' + m.content; }).join('\n'); if (prev.length > 6000) prev = prev.slice(-6000);
+      upTo = legacy.length ? legacy[legacy.length - 1].ts : 0;
+    }
+    var text = await summarizeMessages(char, batch, prev);   /* 只请求这 1 次 */
+    var rec = roll || { id: uid('mem'), characterId: char.id, kind: 'summary', roll: true, upTo: upTo };
+    rec.content = text; rec.ts = Date.now(); rec.ptr = batch[batch.length - 1].ts;
+    await dbPut('memories', rec);
+    char.lastSummaryTs = batch[batch.length - 1].ts; await dbPut('characters', char);   /* 成功了才移动指针；失败就原样保留，不丢内容 */
     sumBlocked[char.id] = false;
     return true;
   } finally { sumBusy[char.id] = false; }
@@ -3007,7 +3116,7 @@ async function summarizeNow(char, silent) {
 async function runSummary(char, auto) {
   if (!auto) toast('正在总结…');
   try {
-    if (await summarizeNow(char, auto)) toast(auto ? '已自动总结一条记忆' : '已生成一条总结');
+    if (await summarizeNow(char, auto, !auto)) toast(auto ? '已自动更新前情提要' : '前情提要已更新');
     if ($('s-memory').classList.contains('active') && cur && cur.id === char.id) renderMemory();
   } catch (e) {
     if (auto) sumBlocked[char.id] = true;
@@ -3019,8 +3128,8 @@ async function maybeAutoSummarize(char) {
   try {
     var am = char.autoMemory || {};
     if (!am.enabled || sumBlocked[char.id] || sumBusy[char.id]) return;
-    var n = await countMessagesAfter(char.id, char.lastSummaryTs || 0);
-    if (n >= (am.interval || 20)) runSummary(char, true);
+    var c0 = await sumCandidates(char);
+    if (c0.older.length >= c0.P.S) runSummary(char, true);   /* 溢出窗口的原话攒够一个步长，才静默总结 */
   } catch (e) { toast('自动总结检查失败：' + e.message.slice(0, 60)); }
 }
 $('b-mem-refine').onclick = async function () {
@@ -3078,8 +3187,8 @@ onShow['s-char'] = async function () {
     realName: h('input', { type: 'text', value: c.realName || '' }),
     userNickname: h('input', { type: 'text', value: c.userNickname || '' }),
     userPersona: h('textarea', {}), persona: h('textarea', { style: 'min-height:220px' }),
-    ctx: h('input', { type: 'number', value: c.contextLimit || '', placeholder: '默认 ' + settings.defaultContext }),
-    interval: h('input', { type: 'number', value: (c.autoMemory && c.autoMemory.interval) || 20 })
+    ctx: h('input', { type: 'number', value: c.contextLimit || '', placeholder: '默认 ' + (settings.ctxWindow || 25) }),
+    interval: h('input', { type: 'number', value: (c.autoMemory && c.autoMemory.step) || '', placeholder: '默认 ' + (settings.ctxStep || 10) })
   };
   f.userPersona.value = c.userPersona || ''; f.persona.value = c.persona || '';
   var auto = switchEl(c.autoMemory && c.autoMemory.enabled);
@@ -3119,8 +3228,8 @@ onShow['s-char'] = async function () {
   body.appendChild(h('div', { class: 'group-title', text: '你的人设' }));
   body.appendChild(h('div', { class: 'group' }, field('你在 TA 面前是谁', f.userPersona), presets.length ? field('', sel) : null));
   body.appendChild(h('div', { class: 'group-title', text: '上下文与记忆' }));
-  body.appendChild(h('div', { class: 'group' }, field('每次带最近多少条消息', f.ctx),
-    h('div', { class: 'field inline' }, h('label', { text: '自动总结记忆' }), auto.el), field('每新增多少条消息总结一次', f.interval)));
+  body.appendChild(h('div', { class: 'group' }, field('短期窗口：每次带多少条最近的原话（留空用全局）', f.ctx),
+    h('div', { class: 'field inline' }, h('div', {}, h('label', { text: '自动总结记忆' }), h('div', { class: 'hint', text: '开启后：未总结的原话攒到「窗口 + 步长」条时，后台静默把最旧的一批并进「前情提要」，并从短期窗口移出（聊天记录本身不删）。' })), auto.el), field('总结步长：溢出多少条总结一次（留空用全局）', f.interval)));
   body.appendChild(h('div', { class: 'group-title', text: '语音' }));
   body.appendChild(h('div', { class: 'group' }, h('div', { class: 'field inline' }, h('div', {}, h('label', { text: '语音自动转文字' }), h('div', { class: 'hint', text: '你发语音时，用浏览器自带的识别实时转成文字（不走 API）；角色的语音气泡也据此直接显示文字。关闭后都先不显示，点气泡里的「转文字」再显示。AI 听你的语音不受这个开关影响。' })), avOn.el)));
   body.appendChild(h('div', { class: 'group' }, h('div', { class: 'field inline' }, h('div', {}, h('label', { text: '允许角色发语音' }), h('div', { class: 'hint', text: '角色偶尔会发语音气泡：说的话直接带在回复里（不额外请求），点语音气泡用「设置 → 语音合成（TTS）」里填的接口合成并播放，合成过的会缓存，重复点不再消耗额度。没配置 TTS 就不能播放。线下模式不会发。' })), aiVoiceOn.el)));
@@ -3189,7 +3298,7 @@ onShow['s-char'] = async function () {
     c.name = f.name.value.trim() || '未命名'; c.realName = f.realName.value.trim() || c.name;
     c.userNickname = f.userNickname.value.trim(); c.persona = f.persona.value; c.userPersona = f.userPersona.value;
     c.contextLimit = Number(f.ctx.value) > 0 ? Number(f.ctx.value) : null;
-    c.autoMemory = { enabled: auto.input.checked, interval: Number(f.interval.value) > 0 ? Number(f.interval.value) : 20 };
+    c.autoMemory = { enabled: auto.input.checked, interval: (c.autoMemory && c.autoMemory.interval) || 20, step: Number(f.interval.value) > 0 ? Number(f.interval.value) : null };
     c.worldBookIds = wbPick.get();
     var on = stPick.get();
     c.stickerCategoryIds = (!stOpts.length || on.length === stOpts.length) ? null : on;
@@ -3290,7 +3399,8 @@ async function renderTokenCard(host) {
         return k;
       }, 0);
     }, 0);
-    parts.push({ name: '聊天记录（最近 ' + p.messages.length + ' 条）', n: hist, hist: true });
+    if (p.depthText) { var dn = estTokens(p.depthText); hist -= dn + 4; parts.push({ name: '背景资料（深度注入）', n: dn }); }
+    parts.push({ name: '聊天记录（最近 ' + (p.messages.length - (p.depthText ? 1 : 0)) + ' 条）', n: hist, hist: true });
     if (media.aud) parts.push({ name: '这一轮的语音（' + media.aud + ' 条，共约 ' + media.secs + ' 秒，直接发音频）', n: media.secs * 32 });
     if (media.img) parts.push({ name: '这一轮的图片（' + media.img + ' 张）', n: media.img * 600 });
     var total = parts.reduce(function (n, x) { return n + x.n; }, 0) || 1;
@@ -3686,6 +3796,8 @@ function buildSettingsBase() {
     sw('sysNotify', '后台系统通知', '切到别的 App 或锁屏时，角色发来的第一条消息会弹系统通知。打开时会向浏览器申请通知权限；有些内置浏览器不支持。'),
     txt('bubbleSlow', '气泡出现速度（倍数）', 'number', '1', '模拟真人打字：1=默认，2=再慢一倍，0.5=快一倍，0=不等待、直接全部弹出')));
 
+  var depthSel = h('select', {}, h('option', { value: 'system', text: 'system（默认）' }), h('option', { value: 'user', text: 'user（兼容个别中转）' }));
+  depthSel.value = draft.depthRole || 'system'; depthSel.onchange = function () { draft.depthRole = depthSel.value; markDirty(); };
   var asrSel = h('select', {}); SPEECH_LANGS.forEach(function (l) { asrSel.appendChild(h('option', { value: l[0], text: l[1] })); });
   asrSel.value = draft.asrLang || 'zh-CN'; asrSel.onchange = function () { draft.asrLang = asrSel.value; markDirty(); };
   var vsSel = h('select', {}, h('option', { value: 'audio', text: '直接发音频（Gemini 等能听的模型）' }), h('option', { value: 'text', text: '只发文字 + 语气提示' }));
@@ -3712,9 +3824,11 @@ function buildSettingsBase() {
 
   body.appendChild(h('div', { class: 'group-title', text: '上下文' }));
   body.appendChild(h('div', { class: 'group' },
-    txt('defaultContext', '默认带最近多少条消息', 'number', '30', '角色设置里可以单独覆盖'),
-    txt('summaryMax', '每条总结的字数上限（越小越省 token）', 'number', '200'),
-    txt('memoryLimit', '近期记忆窗口（最近多少条记忆每次都带）', 'number', '20'),
+    txt('ctxWindow', '短期窗口：每次带多少条最近的原话', 'number', '25', '角色设置里可以单独覆盖'),
+    txt('ctxStep', '总结步长：原话溢出窗口多少条就总结一次', 'number', '10', '角色开了「自动总结记忆」才生效：未总结的原话攒到 窗口+步长 条，就把最旧的一批并进前情提要'),
+    txt('rollMax', '前情提要的字数上限（越小越省 token）', 'number', '600', '前情提要只有一段，每次总结时更新，所以 token 不会越攒越多'),
+    txt('memoryLimit', '旧记忆：还没有前情提要时，最近多少条旧总结每次都带', 'number', '20'),
+    field('背景资料的消息角色（深度注入）', depthSel, '默认 system。如果你的中转/模型不认对话中间的 system 消息（报错或像没看到），改成 user'),
     txt('scanDepth', '世界书扫描最近几条消息', 'number', '5'),
     txt('worldBookMaxChars', '世界书最多带入多少字', 'number', '6000'),
     txt('stickerPromptLimit', '提示词里最多列出多少个表情包', 'number', '60', '表情包很多时会随机抽取这么多告诉角色，避免提示词太长')));
@@ -4233,9 +4347,9 @@ async function applyImport(data, partIds, replaceMode) {
       var s = p.stores[j]; if (!Array.isArray(data[s])) continue;
       if (replaceMode) await dbClear(s);
       if (s === 'characters') {
-        var lastBy = {}; (data.memories || []).forEach(function (m) { if (m.kind !== 'note') lastBy[m.characterId] = Math.max(lastBy[m.characterId] || 0, m.ts || 0); });
+        var lastBy = {}, rollPtr = {}; (data.memories || []).forEach(function (m) { if (m.roll && m.ptr) rollPtr[m.characterId] = Math.max(rollPtr[m.characterId] || 0, m.ptr); else if (m.kind !== 'note') lastBy[m.characterId] = Math.max(lastBy[m.characterId] || 0, m.ts || 0); });
         var lastTh = {}; (data.thoughts || []).forEach(function (t) { lastTh[t.characterId] = Math.max(lastTh[t.characterId] || 0, t.ts || 0); });
-        data[s].forEach(function (c) { if (c.lastSummaryTs == null) c.lastSummaryTs = lastBy[c.id] || 0; if (c.lastThoughtTs == null) c.lastThoughtTs = lastTh[c.id] || 0; });
+        data[s].forEach(function (c) { if (c.lastSummaryTs == null) c.lastSummaryTs = rollPtr[c.id] || lastBy[c.id] || 0; if (c.lastThoughtTs == null) c.lastThoughtTs = lastTh[c.id] || 0; });
       }
       var arr = data[s];
       for (var k = 0; k < arr.length; k += 4000) await dbBulkPut(s, arr.slice(k, k + 4000));   /* 分批写，几万条消息也不会卡死 */
@@ -4502,9 +4616,10 @@ function muNext(dir) {
 }
 function muToggle() {
   if (!mu.song) return;
+  muDucked = false; clearTimeout(muResumeT);
   if (mu.audio.paused) mu.audio.play().catch(function () {}); else mu.audio.pause();
 }
-function muStop() { mu.tk++; mu.audio.pause(); mu.audio.removeAttribute('src'); mu.song = null; mu.queue = []; mu.idx = -1; mu.lrc = []; mu.together = null; muUI(); }
+function muStop() { muDucked = false; mu.tk++; mu.audio.pause(); mu.audio.removeAttribute('src'); mu.song = null; mu.queue = []; mu.idx = -1; mu.lrc = []; mu.together = null; muUI(); }
 mu.audio.addEventListener('ended', function () {
   if (muMode() === 'one' && mu.song) { mu.audio.currentTime = 0; mu.audio.play().catch(function () { muPlayAt(mu.idx); }); return; }
   muNext(1);
@@ -4517,12 +4632,34 @@ mu.audio.addEventListener('error', function () {
   mu.fail++; if (mu.fail < 3 && mu.queue.length > 1) muNext(1);
 });
 mu.audio.addEventListener('timeupdate', muTick);
+/* 角色语音 / 自己的语音 / 录音 在播的时候先把歌暂停，播完自动接着放（提示音不算） */
+var muHolds = new Set(), muDucked = false, muResumeT = 0;
+function muHold(tok) { muHolds.add(tok); clearTimeout(muResumeT); if (!muDucked && mu.song && !mu.audio.paused) { muDucked = true; try { mu.audio.pause(); } catch (e) {} } }
+function muRelease(tok) {
+  muHolds.delete(tok); if (muHolds.size || !muDucked) return;
+  clearTimeout(muResumeT);
+  muResumeT = setTimeout(function () { if (muHolds.size || !muDucked) return; muDucked = false; if (mu.song && mu.audio.paused) mu.audio.play().catch(function () {}); }, 300);
+}
+(function () {
+  var mp = HTMLMediaElement.prototype.play;
+  HTMLMediaElement.prototype.play = function () {
+    var el = this;
+    if (el !== mu.audio && !el.__skip) {
+      if (!el.__dk) { el.__dk = 1; ['ended', 'pause', 'error', 'emptied', 'abort'].forEach(function (ev) { el.addEventListener(ev, function () { muRelease(el); }); }); }
+      muHold(el);
+    }
+    var p = mp.apply(this, arguments);
+    if (p && p.catch) p.catch(function () { if (el !== mu.audio) muRelease(el); });
+    return p;
+  };
+})();
 function muTick() {
   var t = mu.audio.currentTime || 0, k = muLineAt(t), d = mu.audio.duration;
   var bar = document.querySelector('#music-mini .mm-bar i'); if (bar && d > 0) bar.style.width = Math.min(100, t / d * 100) + '%';
   if (k !== mu.lrcI) { mu.lrcI = k; muLrcUI(); }
 }
 function muFmt(t) { t = Math.max(0, Math.floor(t || 0)); return Math.floor(t / 60) + ':' + ('0' + (t % 60)).slice(-2); }
+function muCleanLine(t) { t = String(t || '').trim(); return /纯音乐|请欣赏|暂无歌词|没有歌词|无歌词|歌词.*(暂无|获取失败)/.test(t) ? '' : t; }
 function muCurLine() { return mu.lrcI >= 0 && mu.lrc[mu.lrcI] ? mu.lrc[mu.lrcI].text : ''; }
 /* 系统通知栏 / 锁屏上的播放控制 */
 function muMedia() {
@@ -4704,12 +4841,24 @@ async function muTogetherToggle() {
 async function muPromptCtx(char) {
   if (!mu.together || mu.together !== char.id || !mu.song) return null;
   var pl = await muGetList(char.id);
-  return { song: mu.song.name, artist: mu.song.artist, line: muCurLine(), playing: !mu.audio.paused, mine: pl.songs.slice(0, 15).map(function (s) { return s.name; }) };
+  return { song: mu.song.name, artist: mu.song.artist, line: muCleanLine(muCurLine()), playing: !mu.audio.paused, mine: pl.songs.slice(0, 15).map(function (s) { return s.name; }) };
 }
 function muPromptText(m) {
   var t = '# 一起听歌\n你和用户正在一起听歌（两边同步播放）：当前《' + m.song + '》' + (m.artist ? ' - ' + m.artist : '') + '，' + (m.playing ? '正在播放' : '已暂停') + (m.line ? '，刚唱到「' + m.line + '」' : '') + '。\n像真人一起听歌那样自然地偶尔聊到这首歌或歌词，不用每条都提，也不要复述这段提示。\n想切到下一首时，在回复最末尾单独写一行 [CMD:NEXT_SONG]；';
   if (m.mine.length) t += '想换成你自己喜欢的某首歌，写 [CMD:PLAY_SONG:歌名]（歌名只能从你的歌单里选：' + m.mine.join('、') + '）；';
   return t + '这些指令只给手机程序看，用户看不到，正文里不要提到，也不要频繁切歌。';
+}
+/* 深度注入用：规则放 system 顶部（不常变），当前状态放紧贴最新消息的背景里 */
+function muRulesText(m) {
+  var t = '# 一起听歌\n你和用户正在一起听歌（两边同步播放）。像真人一起听歌那样自然地偶尔聊到这首歌或歌词，不用每条都提，也不要复述背景资料里的提示。\n想切到下一首时，在回复最末尾单独写一行 [CMD:NEXT_SONG]；';
+  if (m.mine.length) t += '想换成你自己喜欢的某首歌，写 [CMD:PLAY_SONG:歌名]（歌名只能从你的歌单里选：' + m.mine.join('、') + '）；';
+  return t + '这些指令只给手机程序看，用户看不到，正文里不要提到，也不要频繁切歌。';
+}
+var muTold = { key: '', n: 0 };
+function muStateText(m) {
+  var key = m.song + '|' + m.playing, full = muTold.key !== key || muTold.n % 6 === 0;   /* 换歌/暂停变化时，或每 6 次请求，才带上歌词；其余只提一句在听什么 */
+  muTold.key = key; muTold.n = full ? 1 : muTold.n + 1;
+  return '一起听歌：你和用户正在一起听《' + m.song + '》' + (m.artist ? ' - ' + m.artist : '') + '（' + (m.playing ? '播放中' : '已暂停') + '）' + (full && m.line ? '，刚唱到「' + m.line + '」' : '') + '。';
 }
 function extractMusicCmd(text) {
   var t = String(text || ''), cmds = [];
