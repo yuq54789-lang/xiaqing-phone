@@ -89,7 +89,10 @@ function countMessagesAfter(cid, ts) {
 
 /* ---------- 设置 ---------- */
 /* 系统提示词里的「回复要求」：内置在代码里，不在界面上显示 */
-var OUTPUT_RULES = '像真人在手机上聊天一样回复：口语化，简短自然。\n把回复拆成几条短消息，每条消息单独一行（最多 50 条）。\n想引用用户说过的某句话来回复时，在那条消息开头写 [引用：用户原话片段]，后面接你的回复，同一行；偶尔用就好。\n不要在开头写你的名字，不要写旁白、括号动作或解释，除非角色设定要求这样。\n始终保持角色设定，不要承认自己是 AI。';
+var TTS_TAGS = ['笑', '轻笑', '咯咯笑', '叹气', '惊呼', '吸气', '呼气', '喘息', '耳语', '唱歌', '哼歌', '结巴', '停顿', '哭声', '抽泣', '呜咽', '呻吟', '清嗓', '咳嗽', '吸鼻子', '咂嘴', '啧嘴', '打哈欠', '打喷嚏', '打嗝', '吞咽', '闷哼', '冷笑', '哼鼻子'];
+/* 语音条里显示的文字：去掉所有半角/全角方括号及里面的声音标签（传给 TTS 的仍保留标签） */
+function stripVoiceTags(t) { return String(t || '').replace(/[\[［][^\]］]+[\]］]/g, '').replace(/\s{2,}/g, ' ').trim(); }
+var OUTPUT_RULES = '像真人在手机上聊天一样回复：口语化，简短自然。\n把回复拆成几条短消息，每条消息单独一行（最多 50 条）。\n想引用用户说过的某句话来回复时，在那条消息开头写 [引用：用户原话片段]，后面接你的回复，同一行；偶尔用就好。\n格式铁律：不要输出 JSON；语音必须写成单独一行的 [语音：…]，引用必须写成 [引用：…]后接回复，不能把它们当成普通文字写出来或写成别的格式。\n不要在开头写你的名字，不要写旁白、括号动作或解释，除非角色设定要求这样。\n始终保持角色设定，不要承认自己是 AI。';
 /* 线下模式：面对面的小说式叙述，不拆气泡、不发表情包 */
 var OFFLINE_RULES = '现在是线下场景，你和用户面对面相处，不再是手机聊天。\n用小说式的叙述回复：用第三人称写角色的动作、神态、环境，对白用「」括起来，连贯地写成一段或几段文字。\n篇幅 {{MIN}} 到 {{MAX}} 字，一次写完，不要拆成多条消息，不要发表情包，不要用你的名字做开头。\n只写角色自己的言行和感受，不要替用户说话、替用户做动作。\n始终保持角色设定，不要承认自己是 AI。';
 /* 线下模式的完整规则 = 内置规则（字数按角色设置填） + 你选的预设（文风/格式要求） */
@@ -219,7 +222,7 @@ function buildSystem(ctx) {
   if (c.userNickname) me.push('你称呼用户为：' + c.userNickname);
   if (c.userPersona) me.push(c.userPersona);
   if (me.length) L.push('# 用户\n' + me.join('\n'));
-  if (ctx.entries.length && !ctx.wbLate) {
+  if (ctx.entries.length) {
     L.push('# 世界书（当前相关的设定）\n' + ctx.entries.map(function (e) {
       return '【' + (e.title || e.book) + '】\n' + e.content;
     }).join('\n\n'));
@@ -245,9 +248,10 @@ function buildSystem(ctx) {
   if (ctx.musicText) L.push(ctx.musicText);
   if (!c.offlineMode) L.push('# 拍一拍与转账\n' + ACT_RULES);
   if (ctx.periodText) L.push(ctx.periodText);
+  if (ctx.watchText) L.push(PW_RULES + ctx.watchText);
   if (ctx.momentsText) L.push(ctx.momentsText + '\n\n# 朋友圈（附加输出）\n' + MOMENT_RULES);
   if (ctx.changes) L.push('# 消息的变动\n用户有时会撤回、删除或编辑消息。方括号里的「[用户撤回了一条消息。撤回前的内容：…]」「[用户删除了…]」和消息后面的「（…原文是…）」就是你看到的变动，你确实知道原来写了什么。像真人一样自然地反应（好奇、调侃、装作没看见都行，看角色性格），不要机械复述这些提示，也不要每次都点破。');
-  if (c.aiVoice && !c.offlineMode) L.push('# 发语音\n想发语音消息时，把那一条单独写成一行：[语音：说的话]。方括号里就是语音里说的原话（口语、带语气词），会自动显示成文字，不用再重复。偶尔用，适合轻声说话、撒娇、叹气、情绪起伏的时候；每次回复最多 1 条。');
+  if (c.aiVoice && !c.offlineMode) L.push('# 发语音\n想发语音消息时，把那一条单独写成一行：[语音：说的话]。方括号里就是语音里说的原话（口语、带语气词），会自动显示成文字，不用再重复。偶尔用，适合轻声说话、撒娇、叹气、情绪起伏的时候；每次回复最多 1 条（多发会被语音接口限流）。\n语音文字里要自然穿插声音表情标签，必须从下面的词表里原样选用，严禁自造：' + TTS_TAGS.map(function (x) { return '[' + x + ']'; }).join('、') + '。\n示例：[语音：[轻笑]你怎么才回我呀，[叹气]我等了好久。]');
   if (ctx.dictate) L.push('# 听写（必须）\n用户发来的 ' + ctx.dictate + ' 条语音还没有文字。请在回复的最最开头，按语音出现的顺序，每条语音写一段 <听写>用户语音里说的原话</听写>（逐字写，不翻译、不润色；完全听不清就写 听不清）。写完标签再正常回复；标签里的字不要在正文里重复，标签本身用户看不到。');
   if (ctx.voice === 'audio') L.push('# 语音消息\n用户的语音会直接以音频发给你（标着「[用户发来一条语音…]」的那条）：请真的去听——语气、情绪、语速、停顿、背景声音，再自然地回应。不要念出「语气」「音频」这类词，也不要复述括号里的提示。历史里更早的语音只剩文字。听不清就坦白说没听清。');
   else if (ctx.voice) L.push('# 语音消息\n用户发来的「[语音 N秒，语气：…] 文字」是语音消息：方括号里是时长和语气提示（根据音量、语速、停顿粗略估计的，仅供参考），后面才是说的内容。请结合语气和内容自然回应，不要把方括号里的提示原样复述。如果写着「没有转成文字」，就说你没听清，让对方再说一遍或打字。');
@@ -272,23 +276,48 @@ function findSticker(pool, name) {
     pool.find(function (s) { return s.name && (s.name.indexOf(n) !== -1 || n.indexOf(s.name) !== -1); }) || null;
 }
 /* 模型回复的每一行 -> 消息草稿（文字或表情包） */
-function estSpeakSecs(t) { var n = String(t || '').replace(/\s/g, '').length; return Math.max(1, Math.round(n / 4.5)); }
+function estSpeakSecs(t) { var n = stripVoiceTags(t).replace(/\s/g, '').length; return Math.max(1, Math.round(n / 4.5)); }
+var RE_VOICE_OPEN = /^[\[【［]\s*(?:语音|语音消息|voice_message|voice)\s*[:：]?\s*/i, RE_QUOTE = /^[\[【［]\s*(?:引用|引用回复|quote_reply|quote)\s*[:：]\s*([\s\S]+?)\s*[\]】］]\s*([\s\S]*)$/i;
 function parseReplyLines(lines, pool, voiceOn) {
-  var out = [];
+  var out = [], voices = 0, pendQ = null;
   lines.forEach(function (ln) {
-    var m = ln.match(/^[\[【]\s*表情包?\s*[:：]\s*(.+?)\s*[\]】]$/);
+    var m = ln.match(/^[\[【［]\s*表情包?\s*[:：]\s*(.+?)\s*[\]】］]$/);
     if (m) {
       var st = findSticker(pool, m[1]);
       if (st) out.push({ type: 'sticker', content: st.url, meta: { meaning: st.name } });
       return; // 找不到对应表情包就丢掉这一行
     }
-    var vo = voiceOn && ln.match(/^[\[【]\s*语音\s*[:：]\s*([\s\S]+?)\s*[\]】]$/);
-    if (vo) { out.push({ type: 'voice', content: vo[1], meta: { tts: true, duration: estSpeakSecs(vo[1]) } }); return; }
-    var q = ln.match(/^[\[【]\s*引用\s*[:：]\s*(.+?)\s*[\]】]\s*([\s\S]*)$/);
-    if (q && q[2]) { out.push({ type: 'text', content: q[2], meta: { quote: { content: q[1] } } }); return; }
-    out.push({ type: 'text', content: ln });
+    var q = ln.match(RE_QUOTE), quote = null;
+    if (q) { if (!q[2]) { pendQ = q[1]; return; } quote = q[1]; ln = q[2]; }   /* 引用单独占一行：套到下一条文字上 */
+    else if (pendQ) { quote = pendQ; pendQ = null; }
+    /* 语音：认 [语音：…] / 【语音:…】/ [语音]… / 没写右括号；每轮只留第一条，多出来的当普通文字 */
+    var vo = voiceOn && RE_VOICE_OPEN.test(ln) ? ln.replace(RE_VOICE_OPEN, '').replace(/^[\]】］]\s*/, '').replace(/\s*[\]】］]\s*$/, '').trim() : null;
+    if (vo) {
+      if (voices === 0) { voices++; out.push({ type: 'voice', content: vo, meta: Object.assign({ tts: true, duration: estSpeakSecs(vo) }, quote ? { quote: { content: quote } } : {}) }); return; }
+      ln = stripVoiceTags(vo) || vo;
+    }
+    out.push({ type: 'text', content: ln, meta: quote ? { quote: { content: quote } } : undefined });
   });
+  out.forEach(function (o) { if (o.meta === undefined) delete o.meta; });
   return out;
+}
+/* 模型偶尔会输出 JSON（[{type:'voice_message',…}]）：还原成我们的行格式，再走同一套渲染 */
+function jsonReplyToLines(text) {
+  var t = String(text || '').trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+  if (!/^[\[{]/.test(t)) return null;
+  var j; try { j = JSON.parse(t); } catch (e) { return null; }
+  var arr = Array.isArray(j) ? j : (j && Array.isArray(j.messages) ? j.messages : (j && typeof j === 'object' ? [j] : null));
+  if (!arr || !arr.length || !arr.every(function (x) { return x && typeof x === 'object' && (x.type || x.content || x.text); })) return null;
+  var lines = [];
+  arr.forEach(function (x) {
+    var ty = String(x.type || 'text').toLowerCase(), c = x.content != null ? x.content : (x.text != null ? x.text : (x.message != null ? x.message : ''));
+    c = String(c).trim(); if (!c && ty !== 'sticker') return;
+    if (/voice/.test(ty)) lines.push('[语音：' + c + ']');
+    else if (/quote/.test(ty)) { var qt = x.quote || x.quote_content || x.quoted || x.reply_to || ''; if (qt && typeof qt === 'object') qt = qt.content || qt.text || ''; lines.push(qt ? '[引用：' + String(qt) + ']' + c : c); }
+    else if (/sticker/.test(ty)) lines.push('[表情包：' + (x.name || x.meaning || c) + ']');
+    else lines.push(c);
+  });
+  return lines.length ? lines.join('\n') : null;
 }
 
 /* 一条历史消息 -> 给模型看的文字 */
@@ -600,7 +629,7 @@ var UI_LANGS = [['zh', '简体中文'], ['zh-TW', '繁體中文'], ['en', 'Engli
 var uiLang = 'zh', uiDict = null;
 try { uiLang = localStorage.getItem('mp-lang') || 'zh'; if (uiLang !== 'zh') uiDict = JSON.parse(localStorage.getItem('mp-i18n-' + uiLang) || 'null'); if (!uiDict) uiLang = 'zh'; } catch (e) { uiLang = 'zh'; uiDict = null; }
 function T(s) { return (uiDict && typeof s === 'string' && uiDict[s]) || s; }
-var T_SKIP = /\b(bubble|last|msg|quote|trans|cl-voice|cl-jot|vbar|pd-big|pd-sub|stk-name|name-edit|mo-text|mo-name|mo-cm|mo-likes|mo-sign|mu-name|mu-sub|mu-lrc|lp-l)\b/;
+var T_SKIP = /\b(bubble|last|msg|quote|trans|cl-voice|cl-jot|pw-|vbar|pd-big|pd-sub|stk-name|name-edit|mo-text|mo-name|mo-cm|mo-likes|mo-sign|mu-name|mu-sub|mu-lrc|lp-l)\b/;
 function applyStaticI18n() {
   if (!uiDict) return;
   document.documentElement.lang = uiLang === 'zh-TW' ? 'zh-TW' : uiLang;
@@ -842,7 +871,7 @@ var APPS = [
   { name: '网易云音乐', img:'https://i.imgs.ovh/2026/11/12/bec70652b9dafca1319ae6c0186d3087.jpg', color: '#d43c33', icon: 'M9 18V5l11-2v13M9 18a3 3 0 1 1-6 0 3 3 0 0 1 6 0zM20 16a3 3 0 1 1-6 0 3 3 0 0 1 6 0z',
     tap: function () { go('s-music'); } },
   { name: '看手机', img:'https://i.imgs.ovh/2026/11/12/79c9fc0024948a5505778c43d91a6bfd.jpg', color: '#2f6f8f', icon: 'M8 3h8a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H8a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1zM11 18h2M9.5 11.5C10.5 9.8 11.3 9.3 12 9.3s1.5.5 2.5 2.2c-1 1.7-1.8 2.2-2.5 2.2s-1.5-.5-2.5-2.2z',
-    tap: function () { toast('看手机还在开发中'); } },
+    tap: function () { go('s-watch'); } },
   { name: '经期', color: '#d9667c', icon: 'M12 3c3 4 6 7 6 11a6 6 0 0 1-12 0c0-4 3-7 6-11z',
     tap: function () { go('s-period'); } },
   { name: '预设', color: '#7a6aa8', icon: 'M6 3h9l4 4v14H6zM14 3v5h5M9 12h7M9 16h7',   /* 想换图标图片：在这里加 img:'图片网址' */
@@ -1114,7 +1143,7 @@ async function renderList() {
   }
   rows.sort(function (a, b) { return (b.c.pinned ? 1 : 0) - (a.c.pinned ? 1 : 0) || ((b.last && b.last.ts) || 0) - ((a.last && a.last.ts) || 0); });
   rows.forEach(function (r) {
-    var prev = r.last ? (r.last.role === 'user' ? '我：' : '') + msgToText(r.last).replace(/\n/g, ' ') : '还没有消息';
+    var prev = r.last ? (r.last.role === 'user' ? '我：' : '') + (r.last.type === 'voice' && r.last.role === 'assistant' ? '[语音] ' + stripVoiceTags(r.last.content) : msgToText(r.last)).replace(/\n/g, ' ') : '还没有消息';
     var tm = h('div', { class: 'time' }, r.last ? shortTime(r.last.ts) : '');
     if (r.c.pinned) { var pn = h('span', { class: 'pin-ic' }); pn.innerHTML = '<svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor"><path d="M9 3h6l-1 6 3 3v2h-4v6l-1 1-1-1v-6H7v-2l3-3z"/></svg>'; tm.appendChild(pn); }
     var rowEl = h('div', { class: 'char' + (r.c.pinned ? ' pinned' : ''), 'data-cid': r.c.id, onclick: function () { if (Date.now() - lastLP > 700) openChat(r.c.id); } },
@@ -1392,6 +1421,7 @@ async function openChat(cid) {
   $('msgs').innerHTML = ''; oldest = null; lastShownTs = 0;
   renderPage(page, false);
   go('s-chat');
+  requestAnimationFrame(function () { scrollBottom(); setTimeout(scrollBottom, 80); });   /* 页面刚显示出来时再确认一次到底 */
   scrollBottom();
 }
 /* 滚到底；之后 6 秒内图片(表情包)加载撑高了，也会自动再滚到底，避免被底栏挡住 */
@@ -1529,7 +1559,7 @@ function msgNode(m) {
     var tb = h('button', { type: 'button', class: 'vplay', text: '▶', 'aria-label': '播放语音' });
     b.addEventListener('click', function (e) { if (e.target.closest('.vconv')) return; e.stopPropagation(); if (selMode || Date.now() - lastLP < 700) return; speakVoice(tb, m.content, b); });
     b.appendChild(h('div', { class: 'vrow' }, tb, h('span', { class: 'vbar' }, h('i'), h('i'), h('i'), h('i'), h('i'), h('i'), h('i'), h('i'), h('i'), h('i')), h('span', { class: 'vdur', text: fmtDur(meta.duration || estSpeakSecs(m.content)) })));
-    var tx = h('div', { class: 'vtext', text: m.content });
+    var tx = h('div', { class: 'vtext', text: stripVoiceTags(m.content) });
     if (cur && cur.autoVoiceText === false) { tx.hidden = true; b.appendChild(tx); b.appendChild(h('button', { type: 'button', class: 'vconv', text: '转文字', onclick: function (e) { e.stopPropagation(); tx.hidden = false; this.remove(); } })); }
     else b.appendChild(tx);
   } else if (t === 'voice' && meta.audio) {
@@ -2105,6 +2135,51 @@ onShow['s-period'] = function () {
   body.appendChild(h('div', { class: 'hint', style: 'padding:0 20px;color:var(--sub);font-size:12px;line-height:1.6', text: '数据只存在这台设备里。想让某个角色知道并体贴你：角色设置 → 经期 → 打开。只是提示词里多一句话，不会多发请求。' }));
 };
 
+/* ---------- 看手机：APK 里的无障碍服务把「使用记录小报告」攒在本机，网页通过 window.PhoneWatch 读取；
+ * 只在聊天请求生成时顺手带上（隐藏提示词），不额外请求、不联网、不后台推送 ---------- */
+function pwBridge() { return window.PhoneWatch && typeof window.PhoneWatch.getReport === 'function' ? window.PhoneWatch : null; }
+function pwCall(fn, a) { var b = pwBridge(); if (!b || typeof b[fn] !== 'function') return null; try { var r = b[fn](a); return r; } catch (e) { return null; } }
+function pwReport(since) { var r = pwCall('getReport', String(since || 0)); if (!r) return null; try { return typeof r === 'string' ? JSON.parse(r) : r; } catch (e) { return null; } }
+function pwSecs(s) { s = Math.round(s || 0); if (s >= 3600) { var m = Math.round((s % 3600) / 60); return Math.floor(s / 3600) + '小时' + (m ? m + '分' : ''); } if (s >= 60) return Math.round(s / 60) + '分钟'; return s + '秒'; }
+/* 小报告 → 几行字：累计统计 + 最近的高权重内容，总共控制在几百字 */
+function pwFormat(r) {
+  if (!r) return '';
+  var L = [], apps = (r.apps || []).filter(function (a) { return a && a.secs >= 60; }).sort(function (a, b) { return b.secs - a.secs; }).slice(0, 5);
+  if (apps.length) L.push('累计使用：' + apps.map(function (a) { return a.name + ' ' + pwSecs(a.secs); }).join('、'));
+  (r.items || []).slice(-8).forEach(function (it) {
+    var t = String(it.title || '').replace(/\s+/g, ' ').slice(0, 30);
+    L.push(hm(it.ts) + ' ' + it.app + ' 停留' + pwSecs(it.secs) + (t ? '《' + t + '》' : '') + (it.liked ? '，点了赞' : '') + (it.commented ? '，评论了' : ''));
+  });
+  if (r.now) L.push('此刻正在用：' + r.now);
+  return L.join('\n').slice(0, 700);
+}
+async function pwPromptCtx(char) {
+  if (!char.watchOn || !pwBridge()) return null;
+  var now = Date.now(), since = Math.max(char.watchSince || 0, now - 12 * 3600 * 1000), txt = pwFormat(pwReport(since));
+  return txt ? { text: txt, ts: now } : null;
+}
+var PW_RULES = '# 用户的手机动态（只有你能看到的隐藏信息）\n下面是用户上次和你聊天之后，TA 手机上的使用情况（本机整理的摘要）。你可以像无意间瞥到一样，自然地关心、好奇或吐槽；别逐条复述，别说「监控」「记录」「我看到你的日志」，用户没提也可以不说。\n';
+var PW_DEMO = { apps: [{ name: '抖音', secs: 7260 }, { name: '小红书', secs: 1080 }], items: [{ ts: Date.now() - 3600e3, app: '小红书', secs: 180, title: '腹肌男菩萨', liked: true }, { ts: Date.now() - 1800e3, app: '抖音', secs: 95, title: '深夜食堂一人食' }], now: '微信' };
+onShow['s-watch'] = function () {
+  var body = $('watch-body'); body.innerHTML = '';
+  var has = !!pwBridge(), enabled = has ? pwCall('isEnabled') : null, rep = has ? pwReport(Date.now() - 12 * 3600 * 1000) : PW_DEMO;
+  body.appendChild(h('div', { class: 'glass pd-card' },
+    h('div', { class: 'pd-big', text: !has ? '需要 APK' : enabled === false || enabled === 'false' ? '无障碍还没开' : '已就绪' }),
+    h('div', { class: 'pd-sub', text: !has ? '看手机靠安卓「无障碍服务」，网页里做不了；打包成 APK 并装好服务后这里才有数据。下面是示例预览。' : (enabled === false || enabled === 'false' ? '点下面的按钮去系统设置里打开「夏青Phone 看手机」。' : '本机正在静默记录，聊天时才会顺手带给角色。') })));
+  if (has) body.appendChild(h('div', { class: 'btn-row' },
+    h('button', { class: 'btn primary', text: '打开无障碍设置', onclick: function () { pwCall('openSettings'); } }),
+    h('button', { class: 'btn danger', text: '清空记录', onclick: function () { confirmSheet('清空本机的使用记录？', '清空', function () { pwCall('clear'); onShow['s-watch'](); }, true); } })));
+  body.appendChild(h('div', { class: 'group-title', text: '角色这次能看到的内容（最近 12 小时）' }));
+  body.appendChild(h('div', { class: 'glass' }, h('div', { style: 'white-space:pre-wrap;line-height:1.7;font-size:14px', text: pwFormat(rep) || '（暂时没有记录）' })));
+  var bl = h('textarea', { placeholder: '一行一个应用包名，例如：\ncom.eg.android.AlipayGphone', style: 'width:100%;min-height:90px;box-sizing:border-box;border:1px solid var(--line);border-radius:10px;padding:10px;background:transparent;color:inherit' });
+  var cfg = has ? pwCall('getConfig') : null; try { bl.value = ((JSON.parse(cfg || '{}').blacklist) || []).join('\n'); } catch (e) {}
+  body.appendChild(h('div', { class: 'group-title', text: '不记录的应用（包名）' }));
+  body.appendChild(h('div', { class: 'glass' }, bl, h('div', { class: 'btn-row', style: 'margin-top:8px' }, h('button', { class: 'btn', text: '保存', onclick: function () {
+    if (!has) { toast('装了 APK 才能保存'); return; }
+    pwCall('setConfig', JSON.stringify({ blacklist: bl.value.split(/\n+/).map(function (x) { return x.trim(); }).filter(Boolean) })); toast('已保存');
+  } })), h('div', { class: 'hint', style: 'color:var(--sub);font-size:12px;line-height:1.6', text: '密码输入框、银行/支付/验证码类应用默认就不记录。记录只存在这台手机本地。' })));
+  body.appendChild(h('div', { class: 'hint', style: 'padding:0 20px 20px;color:var(--sub);font-size:12px;line-height:1.7', text: '规则：划过不到 10 秒的内容丢弃；停留超过 30 秒或点赞/评论的才记成一条；只保留最近 20 条，新的顶掉最旧的；其余合并成「累计用了多久」。要让某个角色能看，去「角色设置 → 看手机」打开。' }));
+};
 var PLUS_ITEMS = [
   ['重说', 'M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7', function () { confirmSheet('让 ' + cur.name + ' 重新回复上一轮？\n（会删掉 TA 最近这一轮的回复，重新生成）', '重说', regenerate); }],
   ['语音', 'M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3zM6 11a6 6 0 0 0 12 0M12 17v4', function () { openVoiceRecorder(); }],
@@ -2113,7 +2188,9 @@ var PLUS_ITEMS = [
   ['一起听（网易云）', 'M9 18V5l11-2v13M9 18a3 3 0 1 1-3-3 3 3 0 0 1 3 3zM20 16a3 3 0 1 1-3-3 3 3 0 0 1 3 3z', function () { muTogetherToggle(); }],
   ['转账', 'M7 8h12l-3-3M17 16H5l3 3M12 10v4M10.5 11.5h3', function () { transferSheet(); }],
   ['拍一拍', 'M9 11V5.5a1.5 1.5 0 0 1 3 0V10M12 10V4.5a1.5 1.5 0 0 1 3 0V10M15 10V6.5a1.5 1.5 0 0 1 3 0V14a6 6 0 0 1-6 6h-1a6 6 0 0 1-5-2.7L4 13.5a1.5 1.5 0 0 1 2.5-1.6L9 14.5', function () { userPat(); }],
-  ['看手机', 'M8 3h8a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H8a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1zM11 18h2', function () { toast('看手机（关联桌面「看手机」）还在开发中'); }]
+  ['看手机', 'M8 3h8a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H8a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1zM11 18h2', function () {
+    menuSheet('看手机', [[cur.watchOn ? '不让 ' + cur.name + ' 看我的手机' : '让 ' + cur.name + ' 看我的手机', async function () { cur.watchOn = !cur.watchOn; await saveCur(); toast(cur.watchOn ? (pwBridge() ? '已开启：下次回复会带上最近的手机动态' : '已开启（装了 APK 后才有内容）') : '已关闭'); }], ['打开看手机页', function () { go('s-watch'); }]]);
+  }]
 ];
 function closePlus() { $('plusmenu').hidden = true; $('b-plus').classList.remove('on'); }
 $('b-plus').onclick = function () {
@@ -2465,19 +2542,12 @@ async function buildPrompt(char) {
   }
   var wantThought = !!(char.autoThought && char.autoThought.enabled);
   var moCtx = char.momentsOn ? await buildMomentsContext(char) : null;
+  var pwCtx = await pwPromptCtx(char);
   var muCtx = await muPromptCtx(char);   /* 一起听：只有绑定了这个角色才有 */
   var pool = stickerPool(await dbAll('stickers'), char.stickerCategoryIds);
   var shown = sampleStickers(pool, settings.stickerPromptLimit);
-  var system = buildSystem({ gap: gap, char: char, settings: settings, entries: entries, wbLate: true, memories: mems, stickers: shown, thought: thought, preset: preset, wantThought: wantThought, momentsText: moCtx ? moCtx.text : '', periodText: char.periodOn ? periodPromptText() : '', musicText: muCtx ? muPromptText(muCtx) : '', voice: audioUsed ? 'audio' : hasVoice, dictate: dictIds.length, changes: changes, now: Date.now() });
-  /* 世界书挪到最新一条用户消息之前（近因效应）：系统提示词/设定/记忆仍在最顶部 */
-  if (entries.length) {
-    var wbText = '[世界书（当前相关的设定，请优先遵守，不要被上面的历史记忆覆盖）]\n' + entries.map(function (e) { return '【' + (e.title || e.book) + '】\n' + e.content; }).join('\n\n') + '\n[世界书结束]';
-    var li = -1; for (var q = apiMsgs.length - 1; q >= 0; q--) { if (apiMsgs[q].role === 'user') { li = q; break; } }
-    if (li === -1) apiMsgs.push({ role: 'user', content: wbText });
-    else if (typeof apiMsgs[li].content === 'string') apiMsgs[li].content = wbText + '\n\n' + apiMsgs[li].content;
-    else apiMsgs[li].content.unshift({ type: 'text', text: wbText });
-  }
-  return { system: system, messages: apiMsgs, pool: pool, wantThought: wantThought, momentIds: moCtx ? moCtx.ids : null, musicOn: !!muCtx, dictIds: dictIds, stats: { history: history.length, entries: entries.length, memories: mems.length, stickers: shown.length } };
+  var system = buildSystem({ gap: gap, char: char, settings: settings, entries: entries, memories: mems, stickers: shown, thought: thought, preset: preset, wantThought: wantThought, momentsText: moCtx ? moCtx.text : '', periodText: char.periodOn ? periodPromptText() : '', watchText: pwCtx ? pwCtx.text : '', musicText: muCtx ? muPromptText(muCtx) : '', voice: audioUsed ? 'audio' : hasVoice, dictate: dictIds.length, changes: changes, now: Date.now() });
+  return { system: system, watchTs: pwCtx ? pwCtx.ts : 0, messages: apiMsgs, pool: pool, wantThought: wantThought, momentIds: moCtx ? moCtx.ids : null, musicOn: !!muCtx, dictIds: dictIds, stats: { history: history.length, entries: entries.length, memories: mems.length, stickers: shown.length } };
 }
 
 /* 点「等回复」= 发一次请求。按钮永远可点：后台慢时可以再点一次，
@@ -2521,7 +2591,7 @@ async function generateReply(fresh) {
     var mo = extractMoments(ac.reply);   /* 朋友圈互动也随回复一起回来 */
     var st = extractStatus(mo.reply);
     var ex = extractThought(st.reply), replyText = ex.reply;   /* 心声同理 */
-    var items = char.offlineMode ? (replyText.trim() ? [{ type: 'offline', content: replyText.trim() }] : []) : parseReplyLines(splitReply(replyText, 50), prompt.pool, !!char.aiVoice), base = Date.now(), saved = [];
+    var items = char.offlineMode ? (replyText.trim() ? [{ type: 'offline', content: replyText.trim() }] : []) : parseReplyLines(splitReply(jsonReplyToLines(replyText) || replyText, 50), prompt.pool, !char.offlineMode), base = Date.now(), saved = [];
     if (!items.length && !ac.acts.length) throw new Error('模型的回复里没有可显示的内容（只有找不到的表情包）。原始回复：' + text.slice(0, 200));
     r.won = true;
     var actItems = ac.acts.length ? await applyActs(char, ac.acts) : [];
@@ -2537,6 +2607,7 @@ async function generateReply(fresh) {
     });
     await dbBulkPut('messages', saved);
     await applyDictation(prompt.dictIds, dict.texts);
+    if (prompt.watchTs) { char.watchSince = prompt.watchTs; try { await dbPut('characters', char); } catch (e) {} }   /* 这段手机动态已经带过了，下次只带新的 */
     if (prompt.musicOn && mc.cmds.length) { try { await muApplyCmds(char, mc.cmds); } catch (e) {} }
     if (prompt.momentIds) { try { await applyMoments(char, mo.data, prompt.momentIds); } catch (e) { toast('朋友圈互动没存上：' + e.message); } }
     if (prompt.wantThought) {
@@ -2881,6 +2952,7 @@ function refreshThoughtCloud() { if (cloudEl) fillCloud(); }
 /* ---------- 记忆页 ---------- */
 var KIND = { summary: '总结', refined: '精炼', note: '记忆' };
 async function renderMemory() {
+  if (!cur) return;
   $('mem-title').textContent = cur.name + ' · 记忆';
   var mems = (await dbByIndex('memories', 'byChar', cur.id)).sort(function (a, b) { return b.ts - a.ts; });
   var layer = selectMemories(mems, [], settings.memoryLimit), injected = {};
@@ -3069,6 +3141,10 @@ onShow['s-char'] = async function () {
   body.appendChild(h('div', { class: 'group-title', text: '朋友圈' }));
   body.appendChild(h('div', { class: 'group' },
     h('div', { class: 'field inline' }, h('div', {}, h('label', { text: '让 TA 参与朋友圈' }), h('div', { class: 'hint', text: '开启后，TA 每次回复你时会顺带看一眼朋友圈，可能发动态、点赞、评论你的动态；全部并进同一次请求，不会多发请求，只是提示词多一小段（最近 6 条动态）' })), moOn.el)));
+  var wOn = switchEl(c.watchOn === true);
+  body.appendChild(h('div', { class: 'group-title', text: '看手机' }));
+  body.appendChild(h('div', { class: 'group' },
+    h('div', { class: 'field inline' }, h('div', {}, h('label', { text: '让 TA 看我的手机' }), h('div', { class: 'hint', text: '需要 APK 里的无障碍服务。打开后，每次回复你时顺手带上你这段时间的手机使用摘要（几百字），不多发请求。详情见桌面「看手机」' })), wOn.el)));
   var peOn = switchEl(c.periodOn === true);
   body.appendChild(h('div', { class: 'group-title', text: '经期' }));
   body.appendChild(h('div', { class: 'group' },
@@ -3116,7 +3192,7 @@ onShow['s-char'] = async function () {
     var on = stPick.get();
     c.stickerCategoryIds = (!stOpts.length || on.length === stOpts.length) ? null : on;
     c.avatar = av.avatar; c.userAvatar = av.userAvatar;
-    c.autoThought = { enabled: thAuto.input.checked }; c.momentsOn = moOn.input.checked; c.periodOn = peOn.input.checked;
+    c.autoThought = { enabled: thAuto.input.checked }; c.momentsOn = moOn.input.checked; c.periodOn = peOn.input.checked; c.watchOn = wOn.input.checked;
     c.pinned = pinOn.input.checked; c.timeAware = taOn.input.checked; c.timeZone = tzSel.value || '';
     c.autoVoiceText = avOn.input.checked; c.aiVoice = aiVoiceOn.input.checked;
     c.offlineMode = offOn.input.checked;
@@ -3227,6 +3303,7 @@ async function renderTokenCard(host) {
   } catch (e) { info.textContent = '计算失败：' + e.message; }
 }
 onShow['s-chatset'] = function () {
+  if (!cur) { back(); return; }
   var body = $('chatset-body'); body.innerHTML = '';
   var tokHost = h('div', { class: 'glass' }); body.appendChild(tokHost); renderTokenCard(tokHost);
   var prev = h('div', { class: 'bg-prev', text: cur.chatBg ? '' : '未设置背景' });
