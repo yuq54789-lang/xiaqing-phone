@@ -1515,6 +1515,7 @@ async function openChat(cid) {
   cur = chars.find(function (c) { return c.id === cid; }) || await dbGet('characters', cid);
   refreshTitle(); if (selMode) exitSelect(); setQuote(null); $('input').placeholder = cur.offlineMode ? '写下你的动作或对白…' : '说点什么…';
   clearUnread(cid);
+  var bn = document.getElementById('msg-banner'); if (bn) bn.remove();   /* 进了聊天，顶部的新消息通知条就收起来 */
   var page = await pageMessages(cid, null, PAGE);
   applyChatLook();
   $('msgs').innerHTML = ''; oldest = null; lastShownTs = 0;
@@ -2790,8 +2791,10 @@ async function generateReply(fresh) {
       var m2 = saved[k];
       await sleep(bubbleDelay(m2.type === 'text' || m2.type === 'offline' ? m2.content : '', k === 0));
       if (pre[m2.id]) await pre[m2.id];
-      playNotify();   /* 每条气泡都响一声 */
-      if (!viewingChat(char.id)) { notifyNewMsg(char, m2, !told); told = true; }   /* 用户不在这个聊天里：未读+1，第一条弹通知条 */
+      var away = !viewingChat(char.id);
+      /* 你在聊天里：每条气泡都响一声。你不在（在列表/别的页面/后台）：只在第一条响一声并弹通知，后面几条不再响；你点进来之后这一轮剩下的也不再响 */
+      if (!told) playNotify();
+      if (away) { notifyNewMsg(char, m2, !told); told = true; }   /* 用户不在这个聊天里：未读+1，第一条弹通知条 */
       if (cur && cur.id === char.id && !box.querySelector('.row[data-id="' + m2.id + '"]')) {
         var n = msgNode(m2); if (n) { n.classList.add('pop'); box.appendChild(n); } lastShownTs = m2.ts; scrollBottom();
       }
