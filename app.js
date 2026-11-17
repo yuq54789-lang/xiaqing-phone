@@ -2633,7 +2633,7 @@ async function buildPrompt(char) {
   var sctx = { gap: gap, char: char, settings: settings, entries: entries, memories: mems, roll: inj.roll, stickers: shown, thought: thought, preset: preset, wantThought: wantThought, momentsText: moCtx ? moCtx.text : '', periodText: char.periodOn ? periodPromptText() : '', watchText: pwCtx ? pwCtx.text : '', musicText: muCtx ? muRulesText(muCtx) : '', musicState: muCtx ? muStateText(muCtx) : '', voice: audioUsed ? 'audio' : hasVoice, dictate: dictIds.length, changes: changes, now: Date.now(), depth: true };
   var system = buildSystem(sctx), depthText = buildDepth(sctx);
   /* 最后一条是角色自己的话（用户没发新消息就点了「等回复」）：补一句提示，别让模型把自己上一条「续写」成不连贯的新内容 */
-  if (apiMsgs.length && apiMsgs[apiMsgs.length - 1].role === 'assistant') apiMsgs.push({ role: 'user', content: '[系统提示：用户这会儿没有发新消息。你可以自然地主动聊一句，或接着刚才的话题往下说；不要重复你上一条说过的话。]' });
+  if (apiMsgs.length && apiMsgs[apiMsgs.length - 1].role === 'assistant') apiMsgs.push({ role: 'user', content: '[系统提示：以上是到目前为止的聊天记录。如果用户在你上一次回复之前或期间发过还没回应的话，请先接着回应；否则自然地主动聊一句，不要重复你上一条说过的话。]' });
   /* 深度注入：背景资料作为独立一条消息，插在最后一条消息之前（倒数第 2 位）；不拼进用户的话。个别中转不认中间的 system 消息时，设置里可改成 user 角色 */
   var depthIdx = -1;
   if (depthText) {
