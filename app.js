@@ -2138,7 +2138,7 @@ onShow['s-period'] = function () {
 /* ---------- 看手机：APK 里的无障碍服务把「使用记录小报告」攒在本机，网页通过 window.PhoneWatch 读取；
  * 只在聊天请求生成时顺手带上（隐藏提示词），不额外请求、不联网、不后台推送 ---------- */
 function pwBridge() { return window.PhoneWatch && typeof window.PhoneWatch.getReport === 'function' ? window.PhoneWatch : null; }
-function pwCall(fn, a) { var b = pwBridge(); if (!b || typeof b[fn] !== 'function') return null; try { var r = b[fn](a); return r; } catch (e) { return null; } }
+function pwCall(fn, a) { var b = pwBridge(); if (!b || typeof b[fn] !== 'function') return null; try { return a === undefined ? b[fn]() : b[fn](a); } catch (e) { return null; } }
 function pwReport(since) { var r = pwCall('getReport', String(since || 0)); if (!r) return null; try { return typeof r === 'string' ? JSON.parse(r) : r; } catch (e) { return null; } }
 function pwSecs(s) { s = Math.round(s || 0); if (s >= 3600) { var m = Math.round((s % 3600) / 60); return Math.floor(s / 3600) + '小时' + (m ? m + '分' : ''); } if (s >= 60) return Math.round(s / 60) + '分钟'; return s + '秒'; }
 /* 小报告 → 几行字：累计统计 + 最近的高权重内容，总共控制在几百字 */
@@ -2739,6 +2739,8 @@ function showBanner(char, text) {
 }
 /* 页面在后台（切到别的 App / 锁屏）时的系统通知：要在「API设置」里打开并允许通知；不同浏览器支持不一样 */
 function sysNotify(char, text) {
+  /* APK 里（WebView 没有浏览器通知）：走安卓原生通知 */
+  if (settings.sysNotify && window.PhoneNative && typeof window.PhoneNative.notify === 'function') { try { window.PhoneNative.notify(String(char.name || ''), String(text || ''), String(char.id)); } catch (e) {} return; }
   if (!settings.sysNotify || !('Notification' in window) || Notification.permission !== 'granted') return;
   var opt = { body: text, tag: 'chat-' + char.id, renotify: true, silent: false, data: { cid: char.id }, icon: /^data:image|^https?:/.test(char.avatar || '') ? char.avatar : undefined };
   function direct() { try { var n = new Notification(char.name, opt); n.onclick = function () { window.focus(); openChatFromOutside(char.id); n.close(); }; } catch (e) {} }
