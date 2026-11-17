@@ -137,14 +137,14 @@ button { cursor:pointer; }
 .empty { color:var(--sub); text-align:center; padding:60px 24px; line-height:1.9; }
 
 /* 聊天 */
-#msgs { padding:10px 12px 16px; display:flex; flex-direction:column; gap:6px; }
+#msgs { padding:10px 12px 24px; display:flex; flex-direction:column; gap:6px; }
 .row { display:flex; gap:8px; align-items:flex-start; max-width:100%; }
 .row.me { flex-direction:row-reverse; }
 .row .avatar { width:34px; height:34px; font-size:14px; }
 .bubble { max-width:76%; padding:8px 12px; border-radius:16px; background:var(--them); box-shadow:var(--shadow); white-space:pre-wrap; word-break:break-word; border:1px solid var(--line); }
 .row.me .bubble { background:var(--me); border-color:transparent; }
 .bubble.sticker { padding:0; background:transparent !important; border:0 !important; box-shadow:none !important; }
-.bubble.sticker img { max-width:110px; max-height:110px; width:auto; height:auto; border-radius:8px; object-fit:contain; display:block; }
+.bubble.sticker img { max-width:110px; max-height:110px; min-width:64px; min-height:64px; width:auto; height:auto; border-radius:8px; object-fit:contain; display:block; }   /* min：还没加载出来时先占好位置，加载完不会突然撑高 */
 .bubble.sticker .alt { color:var(--sub); font-size:13px; padding:6px 8px; }
 .bubble.transfer { background:#e9a23b; color:#2b1b00; border:0; min-width:170px; }
 .bubble.transfer b { font-size:18px; display:block; }
@@ -246,7 +246,7 @@ button { cursor:pointer; }
 #fab svg { width:22px; height:22px; stroke:currentColor; fill:none; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
 @keyframes fabpop { from { opacity:0; transform:translateY(-10px) scale(.5); } to { opacity:1; transform:none; } }
 /* 聊天背景：独立的固定层，不随消息滚动、不被拉伸 */
-#chat-bg { position:absolute; inset:0; z-index:0; pointer-events:none; background-size:cover; background-position:center; background-repeat:no-repeat; }
+#chat-bg { position:absolute; top:0; left:0; right:0; height:var(--bgh, 100%); z-index:0; pointer-events:none; background-size:cover; background-position:center; background-repeat:no-repeat; }
 #s-chat > :not(#chat-bg) { position:relative; z-index:1; }
 .bg-prev { height:120px; border-radius:10px; border:1px solid var(--line); background:var(--bg) center/cover; margin-bottom:8px; display:flex; align-items:center; justify-content:center; color:var(--sub); font-size:13px; }
 /* 美化页：悬浮磨砂卡片 */
