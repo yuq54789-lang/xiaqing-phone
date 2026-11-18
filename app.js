@@ -111,7 +111,7 @@ var DEFAULTS = {
   baseUrl: '', apiKey: '', model: '', temperature: 0.8,
   stream: false, themeId: 'default', customCss: '', homeBg: '', fontUrl: '', fontData: '', fontName: '',
   secBaseUrl: '', secApiKey: '', secModel: '',
-  scanDepth: 5, worldBookMaxChars: 6000, memoryLimit: 20, summaryMax: 200, defaultContext: 30, ctxWindow: 25, ctxStep: 10, rollMax: 600, recallMax: 3, depthRole: 'system', depthPos: 5, stickerPromptLimit: 60, autoReply: false, period: null, myProfile: null, musicApi: '', musicApiBackup: '', apiPresets: [], activePresetId: null, weather: null, homeLayout: null,
+  scanDepth: 5, worldBookMaxChars: 6000, memoryLimit: 20, summaryMax: 200, defaultContext: 30, ctxWindow: 25, ctxStep: 10, rollMax: 600, recallMax: 3, depthRole: 'user', depthPos: 2, stickerPromptLimit: 60, autoReply: false, period: null, myProfile: null, musicApi: '', musicApiBackup: '', apiPresets: [], activePresetId: null, weather: null, homeLayout: null,
   bubbleSlow: 1,                 /* 气泡出现速度倍数：1=默认，越大越慢 */
   notifyUrl: '', notifyName: '', /* 消息提示音（网址 / 上传的文件名） */
   clockLayout: 'h', clockColor: '', dateColor: '', wxColor: '', clockDy: 0, dateDy: 0, wxDy: 0, clockDx: 0, dateDx: 0, wxDx: 0,   /* 时钟：横/竖排、三处文字颜色、三处上下及左右位置（互不绑定） */
@@ -250,9 +250,8 @@ function fmtTime(ts, tz) {
 }
 
 function buildSystem(ctx) {
-  var c = ctx.char, s = ctx.settings, L = [], D = !!ctx.depth;   /* D：易变的背景（世界书/心声/时间/听歌/手机动态…）不放这里，放到 buildDepth 里紧贴最新消息 */
+  var c = ctx.char, s = ctx.settings, L = [], D = !!ctx.depth;   /* D：易变的背景（世界书/心声/时间/听歌/手机动态…）不放这里，放到 buildDepth 里；格式指令放到 buildBottomFormat 紧贴最底部 */
   L.push('你正在扮演「' + (c.realName || c.name) + '」，' + (c.offlineMode ? '和用户面对面相处。' : '通过手机和用户聊天。'));
-  L.push('# 角色在线状态\n每次回复结束时，额外输出一段状态标记，必须严格使用以下格式：<状态>{"type":"online","text":"刚刚在和你聊天"}</状态>\n状态类型只能从 online、busy、away、sleeping 中选择：online 表示在线，busy 表示忙碌，away 表示暂时离开，sleeping 表示睡眠。text 由你根据当前情绪、活动、剧情和角色设定自由编写，简短自然，最多 16 个字。状态类型不必每次改变，只有符合当前情境时才切换。状态标记必须放在整条回复的最后，不要放进聊天正文，也不要向用户解释这个标记。');
   if (c.persona) L.push('# 角色设定\n' + c.persona);
   var me = [];
   if (c.userNickname) me.push('你称呼用户为：' + c.userNickname);
@@ -282,12 +281,11 @@ function buildSystem(ctx) {
     L.push(tl);
   }
   L.push('# 回复要求\n' + (c.offlineMode ? offlineRules(c, ctx.preset) : OUTPUT_RULES));
-  if (ctx.wantThought) L.push('# 心声（附加输出）\n' + THOUGHT_RULES);
   if (ctx.musicText) L.push(ctx.musicText);
   if (!c.offlineMode) L.push('# 拍一拍与转账\n' + ACT_RULES);
   if (!D && ctx.periodText) L.push(ctx.periodText);
   if (!D && ctx.watchText) L.push(PW_RULES + ctx.watchText);
-  if (!D && ctx.momentsText) L.push(ctx.momentsText + '\n\n# 朋友圈（附加输出）\n' + MOMENT_RULES);
+  if (!D && ctx.momentsText) L.push(ctx.momentsText);
   if (ctx.changes) L.push('# 消息的变动\n用户有时会撤回、删除或编辑消息。方括号里的「[用户撤回了一条消息。撤回前的内容：…]」「[用户删除了…]」和消息后面的「（…原文是…）」就是你看到的变动，你确实知道原来写了什么。像真人一样自然地反应（好奇、调侃、装作没看见都行，看角色性格），不要机械复述这些提示，也不要每次都点破。');
   if (c.aiVoice && !c.offlineMode) L.push('# 发语音\n想发语音消息时，把那一条单独写成一行：[语音：说的话]。方括号里就是语音里说的原话（口语、带语气词），会自动显示成文字，不用再重复。偶尔用，适合轻声说话、撒娇、叹气、情绪起伏的时候；每次回复最多 1 条（多发会被语音接口限流）。\n语音文字里要自然穿插声音表情标签，必须从下面的词表里原样选用，严禁自造：' + TTS_TAGS.map(function (x) { return '[' + x + ']'; }).join('、') + '。\n示例：[语音：[轻笑]你怎么才回我呀，[叹气]我等了好久。]');
   if (ctx.dictate) L.push('# 听写（必须）\n用户发来的 ' + ctx.dictate + ' 条语音还没有文字。请在回复的最最开头，按语音出现的顺序，每条语音写一段 <听写>用户语音里说的原话</听写>（逐字写，不翻译、不润色；完全听不清就写 听不清）。写完标签再正常回复；标签里的字不要在正文里重复，标签本身用户看不到。');
@@ -296,7 +294,7 @@ function buildSystem(ctx) {
   return L.join('\n\n');
 }
 
-/* 深度注入：易变的背景资料，作为独立的一条消息插在聊天记录最后一条之前（不拼进用户的话） */
+/* 深度注入：易变的背景资料与世界书，作为独立的一条消息插在聊天记录倒数第 N 条之前 */
 function buildDepth(ctx) {
   var c = ctx.char, L = [], off = !!c.offlineMode;
   if (c.timeAware !== false) {
@@ -308,14 +306,33 @@ function buildDepth(ctx) {
   if (ctx.musicState) L.push(ctx.musicState);
   if (ctx.periodText) L.push(ctx.periodText);
   if (ctx.watchText) L.push(PW_RULES + ctx.watchText);
-  if (ctx.momentsText) L.push(ctx.momentsText + '\n\n# 朋友圈（附加输出）\n' + MOMENT_RULES);
+  if (ctx.momentsText) L.push(ctx.momentsText);
   if (ctx.recall && ctx.recall.length) L.push('你隐约想起以前聊过的事（和现在聊的有关才用，没关系就当没想起，也不要主动复述）：\n' + ctx.recall.map(function (m) { return '- ' + m.content; }).join('\n'));
   if (ctx.entries && ctx.entries.length) L.push('相关设定（世界书，当前触发的条目）：\n' + ctx.entries.map(function (e) { return '【' + (e.title || e.book) + '】\n' + e.content; }).join('\n\n'));
   if (!off && ctx.stickers && ctx.stickers.length) L.push('可发送的表情包（想发就单独一行写 [表情包：名称]，名称只能从这里选，不要自己编）：' + ctx.stickers.map(function (st) { return st.name; }).join('、'));
-  var tail = off ? '先回应用户最新的一条消息，再按写作要求展开。'
-    : '格式提醒：每条消息单独一行，最多 20 条；先回应用户最新的一条消息，再说别的；引用某句话写 [引用：原话片段]你的回复；' + (c.aiVoice ? '语音单独一行写 [语音：说的话]（每次最多 1 条）；' : '') + '表情包写 [表情包：名称]；不要输出 JSON，也不要输出任何英文思考或说明。';
-  if (!L.length) return tail;
-  return '【背景资料——只有你知道，不是聊天内容。除非和用户正在聊的话题有关，否则不要提起，更不要复述这些提示。】\n' + L.join('\n\n') + '\n\n' + tail;
+  if (!L.length) return '';
+  return '【背景资料——只有你知道，不是聊天内容。除非和用户正在聊的话题有关，否则不要提起，更不要复述这些提示。】\n' + L.join('\n\n');
+}
+
+/* 底部格式指令（Depth 0）：紧贴用户最新消息之后，集中放置防出戏约束与状态/心声/朋友圈等结构化附加输出协议 */
+function buildBottomFormat(ctx) {
+  var c = ctx.char, F = [];
+  if (c.offlineMode) {
+    F.push('请先回应用户最新的一条消息，再按线下写作要求直接以角色视角续写剧情，保持沉浸感，严禁使用AI助手口吻或输出英文思考过程。');
+  } else {
+    F.push('回复要求提醒：每条消息单独一行，最多 20 条；先回应用户最新的一条消息，再说别的；引用某句话写 [引用：原话片段]你的回复；' + (c.aiVoice ? '语音单独一行写 [语音：说的话]（每次最多 1 条）；' : '') + '表情包写 [表情包：名称]；不要输出 JSON 正文，不要输出任何英文思考或说明，直接以角色口吻说话，严禁跳出角色或以AI系统身份回复。');
+  }
+  F.push('\n# 角色在线状态与附加输出（严格按格式放在整条回复的最末尾，不要放进聊天正文，也不要向用户解释）');
+  F.push('1. 角色在线状态（每次回复必写）：<状态>{"type":"online","text":"刚刚在和你聊天"}</状态>\n状态类型只能从 online、busy、away、sleeping 中选择（online=在线，busy=忙碌，away=暂时离开，sleeping=睡眠），text 由你根据当前情绪、活动和角色设定自由编写，简短自然，最多 16 个字。');
+  var idx = 2;
+  if (ctx.wantThought) {
+    F.push(idx + '. 心声（附加输出）：\n' + THOUGHT_RULES);
+    idx++;
+  }
+  if (ctx.momentsText) {
+    F.push(idx + '. 朋友圈（附加输出）：\n' + MOMENT_RULES);
+  }
+  return F.join('\n');
 }
 
 /* 表情包：从角色选中的分类里挑出可用的；太多时随机抽 limit 个，避免提示词过长 */
@@ -715,7 +732,7 @@ function extractMoments(text) {
 }
 
 /* 导出给测试用 */
-if (typeof module !== 'undefined') module.exports = { extractMusicCmd: extractMusicCmd, extractMoments: extractMoments, extractThought: extractThought, offlineRules: offlineRules, selectMemories: selectMemories, triggeredEntries: triggeredEntries, pickMemories: pickMemories, buildSystem: buildSystem, buildDepth: buildDepth, injectMemories: injectMemories, ctxParams: ctxParams, muRulesText: muRulesText, muStateText: muStateText, msgToText: msgToText, toApiMessages: toApiMessages, splitReply: splitReply, parseThought: parseThought, openaiUrl: openaiUrl, stickerPool: stickerPool, sampleStickers: sampleStickers, parseReplyLines: parseReplyLines, findSticker: findSticker };
+if (typeof module !== 'undefined') module.exports = { extractMusicCmd: extractMusicCmd, extractMoments: extractMoments, extractThought: extractThought, offlineRules: offlineRules, selectMemories: selectMemories, triggeredEntries: triggeredEntries, pickMemories: pickMemories, buildSystem: buildSystem, buildDepth: buildDepth, buildBottomFormat: buildBottomFormat, injectMemories: injectMemories, ctxParams: ctxParams, muRulesText: muRulesText, muStateText: muStateText, msgToText: msgToText, toApiMessages: toApiMessages, splitReply: splitReply, parseThought: parseThought, openaiUrl: openaiUrl, stickerPool: stickerPool, sampleStickers: sampleStickers, parseReplyLines: parseReplyLines, findSticker: findSticker };
 
 /* ---------- ⑤ 界面 ---------- */
 var $ = function (id) { return document.getElementById(id); };
@@ -2708,15 +2725,19 @@ async function buildPrompt(char) {
   var pool = stickerPool(await dbAll('stickers'), char.stickerCategoryIds);
   var shown = sampleStickers(pool, settings.stickerPromptLimit);
   var sctx = { gap: gap, char: char, settings: settings, entries: entries, memories: mems, roll: inj.roll, recall: recall, stickers: shown, thought: thought, preset: preset, wantThought: wantThought, momentsText: moCtx ? moCtx.text : '', periodText: char.periodOn ? periodPromptText() : '', watchText: pwCtx ? pwCtx.text : '', musicText: muCtx ? muRulesText(muCtx) : '', musicState: muCtx ? muStateText(muCtx) : '', voice: audioUsed ? 'audio' : hasVoice, dictate: dictIds.length, changes: changes, now: Date.now(), depth: true };
-  var system = buildSystem(sctx), depthText = buildDepth(sctx);
-  /* 深度注入：背景资料作为独立一条消息，插在倒数第 N 条消息之前（设置里「背景资料插入位置」，默认 5：前面还隔着 4 条聊天记录）；不拼进用户的话。个别中转不认中间的 system 消息时，设置里可改成 user 角色 */
+  var system = buildSystem(sctx), depthText = buildDepth(sctx), bottomFormat = buildBottomFormat(sctx);
+  /* 深度注入：背景资料与世界书作为独立一条消息，插在倒数第 N 条消息之前（默认 2：即紧贴用户最新消息之前）；默认 user 角色避免触发系统警觉 */
   var depthIdx = -1;
   if (depthText) {
-    var dp = parseInt(settings.depthPos, 10); if (!(dp >= 1 && dp <= 30)) dp = 5;
+    var dp = parseInt(settings.depthPos, 10); if (!(dp >= 1 && dp <= 30)) dp = 2;
     depthIdx = Math.max(0, apiMsgs.length - (dp - 1));
-    apiMsgs.splice(depthIdx, 0, settings.depthRole === 'user' ? { role: 'user', content: '[系统备忘，不是用户说的话]\n' + depthText } : { role: 'system', content: depthText });
+    apiMsgs.splice(depthIdx, 0, settings.depthRole === 'user' ? { role: 'user', content: depthText } : { role: 'system', content: depthText });
   }
-  return { system: system, depthText: depthText, depthIdx: depthIdx, watchTs: pwCtx ? pwCtx.ts : 0, messages: apiMsgs, pool: pool, wantThought: wantThought, momentIds: moCtx ? moCtx.ids : null, musicOn: !!muCtx, dictIds: dictIds, stats: { history: history.length, recall: recall.length, entries: entries.length, memories: mems.length, stickers: shown.length, roll: inj.roll ? inj.roll.length : 0 } };
+  /* 底部格式指令（Depth 0）：放在整个对话列表最末尾（用户最新消息之后），集中约束格式与状态/心声/朋友圈附加标记 */
+  if (bottomFormat) {
+    apiMsgs.push({ role: settings.depthRole === 'user' ? 'user' : 'system', content: bottomFormat });
+  }
+  return { system: system, depthText: depthText, bottomFormat: bottomFormat, depthIdx: depthIdx, watchTs: pwCtx ? pwCtx.ts : 0, messages: apiMsgs, pool: pool, wantThought: wantThought, momentIds: moCtx ? moCtx.ids : null, musicOn: !!muCtx, dictIds: dictIds, stats: { history: history.length, recall: recall.length, entries: entries.length, memories: mems.length, stickers: shown.length, roll: inj.roll ? inj.roll.length : 0 } };
 }
 
 /* 点「等回复」= 发一次请求。按钮永远可点：后台慢时可以再点一次，
@@ -3481,8 +3502,10 @@ async function renderTokenCard(host) {
         return k;
       }, 0);
     }, 0);
-    if (p.depthText) { var dn = estTokens(p.depthText); hist -= dn + 4; parts.push({ name: '背景资料（深度注入）', n: dn }); }
-    parts.push({ name: '聊天记录（最近 ' + (p.messages.length - (p.depthText ? 1 : 0)) + ' 条）', n: hist, hist: true });
+    if (p.depthText) { var dn = estTokens(p.depthText); hist -= dn + 4; parts.push({ name: '背景资料与世界书（深度注入）', n: dn }); }
+    if (p.bottomFormat) { var bn = estTokens(p.bottomFormat); hist -= bn + 4; parts.push({ name: '格式与附加状态指令（底部注入）', n: bn }); }
+    var extraMsgs = (p.depthText ? 1 : 0) + (p.bottomFormat ? 1 : 0);
+    parts.push({ name: '聊天记录（最近 ' + Math.max(0, p.messages.length - extraMsgs) + ' 条）', n: hist, hist: true });
     if (media.aud) parts.push({ name: '这一轮的语音（' + media.aud + ' 条，共约 ' + media.secs + ' 秒，直接发音频）', n: media.secs * 32 });
     if (media.img) parts.push({ name: '这一轮的图片（' + media.img + ' 张）', n: media.img * 600 });
     var total = parts.reduce(function (n, x) { return n + x.n; }, 0) || 1;
