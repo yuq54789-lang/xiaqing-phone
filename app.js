@@ -110,7 +110,7 @@ var DEFAULTS = {
   stream: false, themeId: 'default', customCss: '', homeBg: '', fontUrl: '', fontData: '', fontName: '',
   secBaseUrl: '', secApiKey: '', secModel: '',
   scanDepth: 5, worldBookMaxChars: 6000, defaultContext: 30, ctxWindow: 25, ctxStep: 30,
-  segMax: 300, profileMax: 800, memCompressAt: 6000, memStageMax: 1500, memAutoCompress: true, memConfirm: false, memTemp: 0.2, tokBudgetOn: false, tokBudget: 60000, maxOutTokens: 0, depthRole: 'system', depthPos: 5, stickerPromptLimit: 60, autoReply: false, period: null, myProfile: null, musicApi: '', musicApiBackup: '', apiPresets: [], activePresetId: null, weather: null, homeLayout: null,
+  segMax: 300, profileMax: 800, memCompressAt: 6000, memStageMax: 1500, memAutoCompress: true, memConfirm: false, memTemp: 0.2, tokBudgetOn: false, tokBudget: 60000, maxOutTokens: 0, stickerPromptLimit: 60, autoReply: false, period: null, myProfile: null, musicApi: '', musicApiBackup: '', apiPresets: [], activePresetId: null, weather: null, homeLayout: null,
   bubbleSlow: 1,                 /* 气泡出现速度倍数：1=默认，越大越慢 */
   notifyUrl: '', notifyName: '', /* 消息提示音（网址 / 上传的文件名） */
   clockLayout: 'h', clockColor: '', dateColor: '', wxColor: '', clockDy: 0, dateDy: 0, wxDy: 0, clockDx: 0, dateDx: 0, wxDx: 0,   /* 时钟：横/竖排、三处文字颜色、三处上下及左右位置（互不绑定） */
@@ -254,7 +254,7 @@ function fmtTime(ts, tz) {
 }
 
 function buildSystem(ctx) {
-  var c = ctx.char, s = ctx.settings, L = [], D = !!ctx.depth;   /* D：易变的背景（世界书/心声/时间/听歌/手机动态…）不放这里，放到 buildDepth 里紧贴最新消息 */
+  var c = ctx.char, s = ctx.settings, L = [], D = false;   /* D：易变的背景（世界书/心声/时间/听歌/手机动态…）不放这里，放到 buildDepth 里紧贴最新消息 */
   L.push('你正在扮演「' + (c.realName || c.name) + '」，' + (c.offlineMode ? '和用户面对面相处。' : '通过手机和用户聊天。'));
   L.push('# 角色在线状态\n需要更新角色状态时，在 actions.status 中填写 type（online、busy、away、sleeping 之一）和 text（不超过16字）。状态不必每次改变，只在符合当前情境时更新；不要把状态信息写进聊天正文。');
   if (c.persona) L.push('# 角色设定\n' + c.persona);
@@ -288,8 +288,9 @@ function buildSystem(ctx) {
   L.push('# 回复要求\n' + (c.offlineMode ? offlineRules(c, ctx.preset) : OUTPUT_RULES));
   if (ctx.wantThought) L.push('# 心声（附加输出）\n' + THOUGHT_RULES);
   if (ctx.musicText) L.push(ctx.musicText);
+  if (ctx.musicState) L.push('# 当前一起听状态\\n' + ctx.musicState);
   if (!c.offlineMode) L.push('# 拍一拍与转账\n' + ACT_RULES);
-  if (!D && ctx.periodText) L.push(ctx.periodText);
+  if (ctx.periodText) L.push(ctx.periodText);
   if (ctx.watchText) L.push(PW_RULES + ctx.watchText);
   if (ctx.momentsText) L.push(ctx.momentsText + '\n\n# 朋友圈互动规则\n' + MOMENT_RULES);
   if (ctx.changes) L.push('# 消息的变动\n用户有时会撤回、删除或编辑消息。方括号里的「[用户撤回了一条消息。撤回前的内容：…]」「[用户删除了…]」和消息后面的「（…原文是…）」就是你看到的变动，你确实知道原来写了什么。像真人一样自然地反应（好奇、调侃、装作没看见都行，看角色性格），不要机械复述这些提示，也不要每次都点破。');
@@ -2782,26 +2783,21 @@ async function buildPrompt(char) {
   var pool = stickerPool(await dbAll('stickers'), char.stickerCategoryIds);
   var shown = sampleStickers(pool, settings.stickerPromptLimit);
   var sctx = { gap: gap, char: char, settings: settings, entries: entries, profile: mem.profile, manual: mem.manual, auto: mem.auto.slice(), stickers: shown, thought: thought, preset: preset, wantThought: wantThought, momentsText: moCtx ? moCtx.text : '', periodText: char.periodOn ? periodPromptText() : '', watchText: pwCtx ? pwCtx.text : '', musicText: muCtx ? muRulesText(muCtx) : '', musicState: muCtx ? muStateText(muCtx) : '', voice: audioUsed ? 'audio' : hasVoice, dictate: dictIds.length, changes: changes, now: Date.now(), depth: true };
-  var system = buildSystem(sctx), depthText = buildDepth(sctx), trim = null;
+  var system = buildSystem(sctx), depthText = '', trim = null;
   /* 总 token 控制（设置里的开关，默认关）：估算 系统提示 + 背景资料 + 聊天记录，超过上限就先少带最早的过往摘要，再减最早的聊天记录（至少留 10 条）；角色设定和最新的消息永远不动 */
   if (settings.tokBudgetOn) {
     var maxOut = Number(settings.maxOutTokens) > 0 ? Number(settings.maxOutTokens) : 1500;
     var budget = Math.max(2000, memNum(settings.tokBudget, 60000, 2000, 2000000) - maxOut);
     var histTok = apiMsgs.reduce(function (n, m) { return n + estApiMsg(m); }, 0);
-    var calc = function () { return estTokens(system) + estTokens(depthText) + histTok; };
+    var calc = function () { return estTokens(system) + histTok; };
     var tot = calc(), dMem = 0, dRows = 0;
     while (tot > budget && sctx.auto.length) { sctx.auto.shift(); dMem++; system = buildSystem(sctx); tot = calc(); }
     while (tot > budget && apiMsgs.length > 10) { histTok -= estApiMsg(apiMsgs.shift()); dRows++; tot = calc(); }
     trim = { budget: budget, total: tot, mem: dMem, rows: dRows, over: tot > budget };
   }
-  /* 深度注入：背景资料作为独立一条消息，插在倒数第 N 条消息之前（设置里「背景资料插入位置」，默认 5：前面还隔着 4 条聊天记录）；不拼进用户的话。个别中转不认中间的 system 消息时，设置里可改成 user 角色 */
+  /* 背景资料全部在 system 中，不再向聊天记录插入额外消息 */
   var depthIdx = -1;
-  if (depthText) {
-    var dp = parseInt(settings.depthPos, 10); if (!(dp >= 1 && dp <= 30)) dp = 5;
-    depthIdx = Math.max(0, apiMsgs.length - (dp - 1));
-    apiMsgs.splice(depthIdx, 0, settings.depthRole === 'user' ? { role: 'user', content: '[系统备忘，不是用户说的话]\n' + depthText } : { role: 'system', content: depthText });
-  }
-  return { system: system, depthText: depthText, depthIdx: depthIdx, watchTs: pwCtx ? pwCtx.ts : 0, messages: apiMsgs, pool: pool, wantThought: wantThought, momentIds: moCtx ? moCtx.ids : null, musicOn: !!muCtx, dictIds: dictIds, stats: { history: history.length, entries: entries.length, memories: mem.manual.length + sctx.auto.length, stickers: shown.length, profile: mem.profile.length }, trim: trim };
+  return { system: system, depthText: '', depthIdx: depthIdx, watchTs: pwCtx ? pwCtx.ts : 0, messages: apiMsgs, pool: pool, wantThought: wantThought, momentIds: moCtx ? moCtx.ids : null, musicOn: !!muCtx, dictIds: dictIds, stats: { history: history.length, entries: entries.length, memories: mem.manual.length + sctx.auto.length, stickers: shown.length, profile: mem.profile.length }, trim: trim };
 }
 
 /* 点「等回复」= 发一次请求。按钮永远可点：后台慢时可以再点一次，
@@ -3668,8 +3664,7 @@ async function renderTokenCard(host) {
       }, 0);
     }, 0);
     if (p.trim) host.appendChild(h('div', { class: 'bt-hint', style: 'color:' + (p.trim.over ? '#c0392b' : 'var(--sub)'), text: '总 token 控制已开（上限约 ' + p.trim.budget + ' 输入 token）：' + ((p.trim.mem || p.trim.rows) ? '这次裁掉了 ' + p.trim.mem + ' 条最早的过往摘要、' + p.trim.rows + ' 行最早的聊天记录。' : '没有超出，什么都没裁。') + (p.trim.over ? '裁到底了仍然超出，请调大上限或精简角色设定。' : '') }));
-    if (p.depthText) { var dn = estTokens(p.depthText); hist -= dn + 4; parts.push({ name: '背景资料（深度注入）', n: dn }); }
-    parts.push({ name: '聊天记录（最近 ' + (p.messages.length - (p.depthText ? 1 : 0)) + ' 条）', n: hist, hist: true });
+    parts.push({ name: '聊天记录（最近 ' + p.messages.length + ' 条）', n: hist, hist: true });
     if (media.aud) parts.push({ name: '这一轮的语音（' + media.aud + ' 条，共约 ' + media.secs + ' 秒，直接发音频）', n: media.secs * 32 });
     if (media.img) parts.push({ name: '这一轮的图片（' + media.img + ' 张）', n: media.img * 600 });
     var total = parts.reduce(function (n, x) { return n + x.n; }, 0) || 1;
@@ -4065,8 +4060,6 @@ function buildSettingsBase() {
     sw('sysNotify', '后台系统通知', '切到别的 App 或锁屏时，角色发来的第一条消息会弹系统通知。打开时会向浏览器申请通知权限；有些内置浏览器不支持。'),
     txt('bubbleSlow', '气泡出现速度（倍数）', 'number', '1', '模拟真人打字：1=默认，2=再慢一倍，0.5=快一倍，0=不等待、直接全部弹出')));
 
-  var depthSel = h('select', {}, h('option', { value: 'system', text: 'system（默认）' }), h('option', { value: 'user', text: 'user（兼容个别中转）' }));
-  depthSel.value = draft.depthRole || 'system'; depthSel.onchange = function () { draft.depthRole = depthSel.value; markDirty(); };
   var asrSel = h('select', {}); SPEECH_LANGS.forEach(function (l) { asrSel.appendChild(h('option', { value: l[0], text: l[1] })); });
   asrSel.value = draft.asrLang || 'zh-CN'; asrSel.onchange = function () { draft.asrLang = asrSel.value; markDirty(); };
   var vsSel = h('select', {}, h('option', { value: 'audio', text: '直接发音频（Gemini 等能听的模型）' }), h('option', { value: 'text', text: '只发文字 + 语气提示' }));
@@ -4109,8 +4102,6 @@ function buildSettingsBase() {
   body.appendChild(h('div', { class: 'group' },
     txt('ctxWindow', '短期窗口：每次带多少行最近的原话', 'number', '25', '一条气泡算一行（AI 一次回复拆成几条就是几行）。角色设置里可以单独覆盖'),
     txt('ctxStep', '总结步长：原话溢出窗口多少行就总结一次', 'number', '30', '角色开了「自动总结记忆」才生效：窗口之外的原话攒够这么多行，就在后台单独发 1 次请求总结，总结过的原话不再带进聊天记录。建议 30–50'),
-    txt('depthPos', '背景资料插入位置（倒数第几条）', 'number', '5', '世界书、听歌、时间、手机动态这些背景资料，插在聊天记录倒数第几条之前。5＝前面隔着最新的 4 条；1＝紧贴最后一条；越大越靠前（越不容易盖过最新消息，但也越容易被忽略）。填 1–30'),
-    field('背景资料的消息角色（深度注入）', depthSel, '默认 system。如果你的中转/模型不认对话中间的 system 消息（报错或像没看到），改成 user'),
     txt('scanDepth', '世界书扫描最近几条消息', 'number', '5'),
     txt('worldBookMaxChars', '世界书最多带入多少字', 'number', '6000'),
     txt('stickerPromptLimit', '提示词里最多列出多少个表情包', 'number', '60', '表情包很多时会随机抽取这么多告诉角色，避免提示词太长')));
