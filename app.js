@@ -111,7 +111,7 @@ var DEFAULTS = {
   baseUrl: '', apiKey: '', model: '', temperature: 0.8,
   stream: false, themeId: 'default', customCss: '', homeBg: '', fontUrl: '', fontData: '', fontName: '',
   secBaseUrl: '', secApiKey: '', secModel: '',
-  scanDepth: 5, worldBookMaxChars: 6000, memoryLimit: 20, summaryMax: 200, defaultContext: 30, ctxWindow: 25, ctxStep: 10, rollMax: 600, recallMax: 3, depthRole: 'system', stickerPromptLimit: 60, autoReply: false, period: null, myProfile: null, musicApi: '', musicApiBackup: '', apiPresets: [], activePresetId: null, weather: null, homeLayout: null,
+  scanDepth: 5, worldBookMaxChars: 6000, memoryLimit: 20, summaryMax: 200, defaultContext: 30, ctxWindow: 25, ctxStep: 10, rollMax: 600, recallMax: 3, depthRole: 'system', depthPos: 5, stickerPromptLimit: 60, autoReply: false, period: null, myProfile: null, musicApi: '', musicApiBackup: '', apiPresets: [], activePresetId: null, weather: null, homeLayout: null,
   bubbleSlow: 1,                 /* 气泡出现速度倍数：1=默认，越大越慢 */
   notifyUrl: '', notifyName: '', /* 消息提示音（网址 / 上传的文件名） */
   clockLayout: 'h', clockColor: '', dateColor: '', wxColor: '', clockDy: 0, dateDy: 0, wxDy: 0, clockDx: 0, dateDx: 0, wxDx: 0,   /* 时钟：横/竖排、三处文字颜色、三处上下及左右位置（互不绑定） */
@@ -2709,12 +2709,11 @@ async function buildPrompt(char) {
   var shown = sampleStickers(pool, settings.stickerPromptLimit);
   var sctx = { gap: gap, char: char, settings: settings, entries: entries, memories: mems, roll: inj.roll, recall: recall, stickers: shown, thought: thought, preset: preset, wantThought: wantThought, momentsText: moCtx ? moCtx.text : '', periodText: char.periodOn ? periodPromptText() : '', watchText: pwCtx ? pwCtx.text : '', musicText: muCtx ? muRulesText(muCtx) : '', musicState: muCtx ? muStateText(muCtx) : '', voice: audioUsed ? 'audio' : hasVoice, dictate: dictIds.length, changes: changes, now: Date.now(), depth: true };
   var system = buildSystem(sctx), depthText = buildDepth(sctx);
-  /* 最后一条是角色自己的话（用户没发新消息就点了「等回复」）：补一句提示，别让模型把自己上一条「续写」成不连贯的新内容 */
-  if (apiMsgs.length && apiMsgs[apiMsgs.length - 1].role === 'assistant') apiMsgs.push({ role: 'user', content: '[系统提示：以上是到目前为止的聊天记录。如果用户在你上一次回复之前或期间发过还没回应的话，请先接着回应；否则自然地主动聊一句，不要重复你上一条说过的话。]' });
-  /* 深度注入：背景资料作为独立一条消息，插在最后一条消息之前（倒数第 2 位）；不拼进用户的话。个别中转不认中间的 system 消息时，设置里可改成 user 角色 */
+  /* 深度注入：背景资料作为独立一条消息，插在倒数第 N 条消息之前（设置里「背景资料插入位置」，默认 5：前面还隔着 4 条聊天记录）；不拼进用户的话。个别中转不认中间的 system 消息时，设置里可改成 user 角色 */
   var depthIdx = -1;
   if (depthText) {
-    depthIdx = Math.max(0, apiMsgs.length - 1);
+    var dp = parseInt(settings.depthPos, 10); if (!(dp >= 1 && dp <= 30)) dp = 5;
+    depthIdx = Math.max(0, apiMsgs.length - (dp - 1));
     apiMsgs.splice(depthIdx, 0, settings.depthRole === 'user' ? { role: 'user', content: '[系统备忘，不是用户说的话]\n' + depthText } : { role: 'system', content: depthText });
   }
   return { system: system, depthText: depthText, depthIdx: depthIdx, watchTs: pwCtx ? pwCtx.ts : 0, messages: apiMsgs, pool: pool, wantThought: wantThought, momentIds: moCtx ? moCtx.ids : null, musicOn: !!muCtx, dictIds: dictIds, stats: { history: history.length, recall: recall.length, entries: entries.length, memories: mems.length, stickers: shown.length, roll: inj.roll ? inj.roll.length : 0 } };
@@ -3911,6 +3910,7 @@ function buildSettingsBase() {
     txt('ctxStep', '总结步长：原话溢出窗口多少条就总结一次', 'number', '10', '角色开了「自动总结记忆」才生效：未总结的原话攒到 窗口+步长 条，就把最旧的一批并进前情提要'),
     txt('rollMax', '前情提要的字数上限（越小越省 token）', 'number', '600', '前情提要只有一段，每次总结时更新，所以 token 不会越攒越多'),
     txt('recallMax', '关键词回忆：最多想起几段旧记忆', 'number', '3', '每次总结还会单独存一段小摘要。聊天里出现了摘要里的词，就把最相关的几段放进背景资料（不额外请求）；填 0 关闭'),
+    txt('depthPos', '背景资料插入位置（倒数第几条）', 'number', '5', '世界书、听歌、时间、手机动态这些背景资料，插在聊天记录倒数第几条之前。5＝前面隔着最新的 4 条；1＝紧贴最后一条；越大越靠前（越不容易盖过最新消息，但也越容易被忽略）。填 1–30'),
     txt('memoryLimit', '旧记忆：还没有前情提要时，最近多少条旧总结每次都带', 'number', '20'),
     field('背景资料的消息角色（深度注入）', depthSel, '默认 system。如果你的中转/模型不认对话中间的 system 消息（报错或像没看到），改成 user'),
     txt('scanDepth', '世界书扫描最近几条消息', 'number', '5'),
@@ -4267,7 +4267,7 @@ var PARTS = [
   { id: 'stk', name: '表情包', stores: ['stickers', 'stickerCategories'] },
   { id: 'presets', name: '预设（线下写作）', stores: ['offlinePresets'] },
   { id: 'beauty', name: '美化', stores: ['beautyPresets', 'miniPresets'], settings: BEAUTY_KEYS, files: ['homeBgFile', 'notifyFile'], hint: '主题、壁纸、字体、提示音、图标、CSS 及各种美化预设' },
-  { id: 'api', name: 'API 设置', stores: [], settings: API_KEYS_SET, hint: '含 API Key，请自己保管', secret: true },
+  { id: 'api', name: 'API 设置', stores: [], settings: API_KEYS_SET, local: ['mp_tts'], hint: '含 API Key 和语音(TTS)接口地址/密钥，请自己保管', secret: true },
   { id: 'misc', name: '其它设置', stores: [], settingsRest: true, hint: '世界书扫描深度、记忆条数、气泡速度、通知等' }
 ];
 function partOf(id) { return PARTS.find(function (p) { return p.id === id; }); }
@@ -4293,6 +4293,7 @@ async function buildExport(partIds, withKey) {
     for (var j = 0; j < p.stores.length; j++) out[p.stores[j]] = await dbAll(p.stores[j]);
     var keys = p.settings || (p.settingsRest ? restSettingKeys(settings) : null);
     if (keys) { sObj = sObj || {}; keys.forEach(function (k) { if (settings[k] !== undefined) sObj[k] = JSON.parse(JSON.stringify(settings[k])); }); }
+    if (p.local) { p.local.forEach(function (k) { try { var v = localStorage.getItem(k); if (v) { out.local = out.local || {}; out.local[k] = v; } } catch (e) {} }); }   /* localStorage 里的 TTS 地址/密钥也带上，换包不用重新填 */
     if (p.files) { out.files = out.files || {}; p.files.forEach(function (k) { var v = k === 'homeBgFile' ? homeBgFile : notifyFile; if (v) out.files[k] = v; }); }
   }
   if (out.characters) out.characters.forEach(function (c) { delete c.lastSummaryTs; delete c.lastThoughtTs; });
@@ -4419,7 +4420,8 @@ function partsInData(data) {
     var keys = p.settings || (p.settingsRest && data.settings ? restSettingKeys(data.settings) : null);
     if (keys && data.settings) { var hit = keys.filter(function (k) { return data.settings[k] !== undefined; }).length; if (hit) { has = true; if (!p.stores.length) n = hit; } }
     if (p.files && data.files && Object.keys(data.files).some(function (k) { return p.files.indexOf(k) >= 0; })) has = true;
-    if (has && (n > 0 || p.settings || p.files)) res.push({ part: p, n: n });
+    if (p.local && data.local && p.local.some(function (k) { return data.local[k] != null; })) has = true;
+    if (has && (n > 0 || p.settings || p.files || p.local)) res.push({ part: p, n: n });
   });
   return res;
 }
@@ -4440,6 +4442,7 @@ async function applyImport(data, partIds, replaceMode) {
     }
     var keys = p.settings || (p.settingsRest && data.settings ? restSettingKeys(data.settings) : null);
     if (keys && data.settings) { patch = patch || {}; keys.forEach(function (k) { if (data.settings[k] !== undefined) patch[k] = data.settings[k]; }); }
+    if (p.local && data.local) { p.local.forEach(function (k) { if (data.local[k] != null) { try { localStorage.setItem(k, String(data.local[k])); } catch (e) {} } }); }
     if (p.files && data.files) {
       if (data.files.homeBgFile != null) { homeBgFile = data.files.homeBgFile; await dbPut('settings', { key: 'homeBgFile', data: homeBgFile }); }
       if (data.files.notifyFile != null) { notifyFile = data.files.notifyFile; await dbPut('settings', { key: 'notifyFile', data: notifyFile }); }
