@@ -92,9 +92,8 @@ function countMessagesAfter(cid, ts) {
 var TTS_TAGS = ['笑', '轻笑', '咯咯笑', '叹气', '惊呼', '吸气', '呼气', '喘息', '耳语', '唱歌', '哼歌', '结巴', '停顿', '哭声', '抽泣', '呜咽', '呻吟', '清嗓', '咳嗽', '吸鼻子', '咂嘴', '啧嘴', '打哈欠', '打喷嚏', '打嗝', '吞咽', '闷哼', '冷笑', '哼鼻子'];
 /* 语音条里显示的文字：去掉所有半角/全角方括号及里面的声音标签（传给 TTS 的仍保留标签） */
 function stripVoiceTags(t) { return String(t || '').replace(/[\[［][^\]］]+[\]］]/g, '').replace(/\s{2,}/g, ' ').trim(); }
-var OUTPUT_RULES = '像真人在手机上聊天一样回复：口语化，简短自然。\n把回复拆成几条短消息，每条消息单独一行（最多 20 条）。\n想引用用户说过的某句话来回复时，在那条消息开头写 [引用：用户原话片段]，后面接你的回复，同一行；只引用用户最近几条里的话，偶尔用就好，不要去翻很早以前的旧消息来引用。\n格式铁律：不要输出 JSON；语音必须写成单独一行的 [语音：…]，引用必须写成 [引用：…]后接回复，不能把它们当成普通文字写出来或写成别的格式。\n不要在开头写你的名字，不要写旁白、括号动作或解释，除非角色设定要求这样。\n每次开口都要根据当前的话题和心情自然起头，不要沿用上一条或最近几条的开头词、句式和口头禅。\n始终保持角色设定，不要承认自己是 AI。\n只输出角色说的话：不要输出你的思考、写作计划或英文说明（比如 “Let\'s write a natural response.”），回复一开头就是角色的话。';
-/* 线下模式：面对面的小说式叙述，不拆气泡、不发表情包 */
-var OFFLINE_RULES = '现在是线下场景，你和用户面对面相处，不再是手机聊天。\n用小说式的叙述回复：用第三人称写角色的动作、神态、环境，对白用「」括起来，连贯地写成一段或几段文字。\n篇幅 {{MIN}} 到 {{MAX}} 字，一次写完，不要拆成多条消息，不要发表情包，不要用你的名字做开头。\n只写角色自己的言行和感受，不要替用户说话、替用户做动作。\n始终保持角色设定，不要承认自己是 AI。';
+var OUTPUT_RULES = '像真人在手机上聊天一样回复：口语化、简短自然。\n把回复拆成多条短消息，每条消息单独一行（最多 20 条）。\n想引用用户最近说过的话，使用 chatResponse 中 type 为 quote 的消息对象，quote 字段写原话，content 写回复。\n【输出格式铁律】每次回复必须是一个完整、合法的 JSON 对象；禁止 Markdown 代码围栏、JSON 数组、JSON 前后说明文字。顶层只使用 chatResponse 和 actions 两个键。\nchatResponse 是消息数组；每项使用 type 和 content。type 可为 text、voice、sticker、quote；sticker 使用 sticker_name；quote 使用 quote；voice 的 content 是语音原话。线上模式不要把动作标记写进聊天正文。\nactions 是对象，可按需包含 status、thought、moments、social、music；没有动作时可给空对象。status 格式为 {"type":"online|busy|away|sleeping","text":"不超过16字"}；thought 格式为 {"heartfeltVoice":"不超过40字","randomJottings":"不超过120字"}，仅在原有心声功能要求生成时提供；moments 格式为 {"post":"字符串","likes":["动态ID"],"comments":[{"id":"动态ID","text":"评论","reply":"可选"}]}；social 是动作数组，支持 {"type":"pat"}、{"type":"transfer","amount":正数,"note":"可选备注"}、{"type":"accept"}、{"type":"refund"}；music 是动作数组，支持 {"type":"next"} 或 {"type":"play","name":"歌曲名"}。\n不要在开头写角色名字，不要写旁白、括号动作或解释，除非角色设定要求这样。每次开口根据当前话题和心情自然起头，不要重复近期开头词。始终保持角色设定，不要承认自己是 AI。只输出 JSON 对象，不输出思考过程或英文说明。';
+var OFFLINE_RULES = '现在是线下场景，你和用户面对面相处。用小说式的叙述回复：用第三人称写角色的动作、神态、环境，对白用「」括起来，连贯地写成一段或几段文字。篇幅 {{MIN}} 到 {{MAX}} 字，一次写完，不要拆成多条消息，不要发表情包，不要用你的名字做开头。只写角色自己的言行和感受，不要替用户说话、替用户做动作。始终保持角色设定，不要承认自己是 AI。\n【输出格式铁律】仍必须只输出一个完整 JSON 对象，顶层只包含 chatResponse 和 actions；chatResponse 为仅含一个 {type:"text",content:"线下叙述正文"} 的数组；actions 按需包含 status、thought、moments，不要使用 innerVoice。';
 /* 线下模式的完整规则 = 内置规则（字数按角色设置填） + 你选的预设（文风/格式要求） */
 function offlineRules(c, preset) {
   var w = (c && c.offlineWords) || {}, mn = Number(w.min) > 0 ? Math.round(w.min) : 200, mx = Number(w.max) > 0 ? Math.round(w.max) : 600;
@@ -104,9 +103,8 @@ function offlineRules(c, preset) {
   return out;
 }
 /* 心声并入回复：不另外请求，让模型在同一次回复末尾顺带写 */
-var THOUGHT_RULES = '写完回复正文后，另起一行，写下你此刻的内心，严格按下面格式，只写一次，放在整个回复的最末尾：\n<心声>{"heartfeltVoice":"…","randomJottings":"…"}</心声>\nheartfeltVoice：一句话，你心里没有说出口的真实想法，不超过 40 字；randomJottings：一小段随笔，像日记或碎碎念，记录此刻的心情或刚发生的小事，不超过 120 字。语气必须符合角色设定。这一段只给用户在「心声」页看，不是聊天内容，正文里不要提到它。';
-/* 朋友圈并入回复：角色的动态 / 点赞 / 评论不另外请求，跟着正常回复一起输出 */
-var MOMENT_RULES = '你和用户互为朋友圈好友。上面是最近的动态（方括号里是动态 id）。写完回复正文后，如果想在朋友圈互动，另起一行写，严格按下面格式，只写一次：\n<朋友圈>{"post":"","likes":[],"comments":[]}</朋友圈>\npost：你想发的新动态（口语、像真人发朋友圈、符合角色，不超过 100 字），不想发就留空；不要频繁发，最近发过就留空。likes：想点赞的动态 id 列表。comments：[{"id":"动态id","text":"评论内容","reply":"想回复的人的名字，可省略"}]。用户新发的动态、标着（新）的评论，要自然地回应，但不必每条都评论。完全没有互动就整段不写。这一段是在朋友圈页面显示的，不是聊天内容，正文里不要提到它。';
+var THOUGHT_RULES = '当原有心声功能要求生成时，把心声放在 actions.thought 对象中，字段为 heartfeltVoice（不超过40字）和 randomJottings（不超过120字）。这不是聊天正文；不要新增 innerVoice 字段，也不要把心声念给用户听。';
+var MOMENT_RULES = '你和用户互为朋友圈好友。上文提供了最近动态及动态 ID。需要发动态、点赞或评论时，在 actions.moments 中按结构化字段填写：post 为新动态（不超过100字，不想发留空）；likes 为动态 ID 数组；comments 为 [{id,text,reply?}]。不要重复评论已互动内容，不要频繁发动态；没有互动时省略 moments。朋友圈动作不是聊天正文。';
 var DEFAULTS = {
   baseUrl: '', apiKey: '', model: '', temperature: 0.8,
   stream: false, themeId: 'default', customCss: '', homeBg: '', fontUrl: '', fontData: '', fontName: '',
@@ -258,14 +256,14 @@ function fmtTime(ts, tz) {
 function buildSystem(ctx) {
   var c = ctx.char, s = ctx.settings, L = [], D = !!ctx.depth;   /* D：易变的背景（世界书/心声/时间/听歌/手机动态…）不放这里，放到 buildDepth 里紧贴最新消息 */
   L.push('你正在扮演「' + (c.realName || c.name) + '」，' + (c.offlineMode ? '和用户面对面相处。' : '通过手机和用户聊天。'));
-  L.push('# 角色在线状态\n每次回复结束时，额外输出一段状态标记，必须严格使用以下格式：<状态>{"type":"online","text":"刚刚在和你聊天"}</状态>\n状态类型只能从 online、busy、away、sleeping 中选择：online 表示在线，busy 表示忙碌，away 表示暂时离开，sleeping 表示睡眠。text 由你根据当前情绪、活动、剧情和角色设定自由编写，简短自然，最多 16 个字。状态类型不必每次改变，只有符合当前情境时才切换。状态标记必须放在整条回复的最后，不要放进聊天正文，也不要向用户解释这个标记。');
+  L.push('# 角色在线状态\n需要更新角色状态时，在 actions.status 中填写 type（online、busy、away、sleeping 之一）和 text（不超过16字）。状态不必每次改变，只在符合当前情境时更新；不要把状态信息写进聊天正文。');
   if (c.persona) L.push('# 角色设定\n' + c.persona);
   var me = [];
   if (c.userNickname) me.push('你称呼用户为：' + c.userNickname);
   if (c.userPersona) me.push(c.userPersona);
   if (me.length) L.push('# 用户\n' + me.join('\n'));
-  if (!D && ctx.entries.length) {
-    L.push('# 世界书（当前相关的设定）\n' + ctx.entries.map(function (e) {
+  if (ctx.entries && ctx.entries.length) {
+    L.push('# 世界书（已挂载的全部设定；每次回复均需遵守）\n' + ctx.entries.map(function (e) {
       return '【' + (e.title || e.book) + '】\n' + e.content;
     }).join('\n\n'));
   }
@@ -292,8 +290,8 @@ function buildSystem(ctx) {
   if (ctx.musicText) L.push(ctx.musicText);
   if (!c.offlineMode) L.push('# 拍一拍与转账\n' + ACT_RULES);
   if (!D && ctx.periodText) L.push(ctx.periodText);
-  if (!D && ctx.watchText) L.push(PW_RULES + ctx.watchText);
-  if (!D && ctx.momentsText) L.push(ctx.momentsText + '\n\n# 朋友圈（附加输出）\n' + MOMENT_RULES);
+  if (ctx.watchText) L.push(PW_RULES + ctx.watchText);
+  if (ctx.momentsText) L.push(ctx.momentsText + '\n\n# 朋友圈互动规则\n' + MOMENT_RULES);
   if (ctx.changes) L.push('# 消息的变动\n用户有时会撤回、删除或编辑消息。方括号里的「[用户撤回了一条消息。撤回前的内容：…]」「[用户删除了…]」和消息后面的「（…原文是…）」就是你看到的变动，你确实知道原来写了什么。像真人一样自然地反应（好奇、调侃、装作没看见都行，看角色性格），不要机械复述这些提示，也不要每次都点破。');
   if (c.aiVoice && !c.offlineMode) L.push('# 发语音\n想发语音消息时，把那一条单独写成一行：[语音：说的话]。方括号里就是语音里说的原话（口语、带语气词），会自动显示成文字，不用再重复。偶尔用，适合轻声说话、撒娇、叹气、情绪起伏的时候；每次回复最多 1 条（多发会被语音接口限流）。\n语音文字里要自然穿插声音表情标签，必须从下面的词表里原样选用，严禁自造：' + TTS_TAGS.map(function (x) { return '[' + x + ']'; }).join('、') + '。\n示例：[语音：[轻笑]你怎么才回我呀，[叹气]我等了好久。]');
   if (ctx.dictate) L.push('# 听写（必须）\n用户发来的 ' + ctx.dictate + ' 条语音还没有文字。请在回复的最最开头，按语音出现的顺序，每条语音写一段 <听写>用户语音里说的原话</听写>（逐字写，不翻译、不润色；完全听不清就写 听不清）。写完标签再正常回复；标签里的字不要在正文里重复，标签本身用户看不到。');
@@ -313,12 +311,9 @@ function buildDepth(ctx) {
   if (ctx.thought) L.push('你此刻的内心（只有你自己知道，不要念出来，但言行要和它一致）：心声：' + ctx.thought.heartfeltVoice + (ctx.thought.randomJottings ? '；散记：' + ctx.thought.randomJottings : ''));
   if (ctx.musicState) L.push(ctx.musicState);
   if (ctx.periodText) L.push(ctx.periodText);
-  if (ctx.watchText) L.push(PW_RULES + ctx.watchText);
-  if (ctx.momentsText) L.push(ctx.momentsText + '\n\n# 朋友圈（附加输出）\n' + MOMENT_RULES);
-  if (ctx.entries && ctx.entries.length) L.push('相关设定（世界书，当前触发的条目）：\n' + ctx.entries.map(function (e) { return '【' + (e.title || e.book) + '】\n' + e.content; }).join('\n\n'));
   if (!off && ctx.stickers && ctx.stickers.length) L.push('可发送的表情包（想发就单独一行写 [表情包：名称]，名称只能从这里选，不要自己编）：' + ctx.stickers.map(function (st) { return st.name; }).join('、'));
   var tail = off ? '先回应用户最新的一条消息，再按写作要求展开。'
-    : '格式提醒：每条消息单独一行，最多 20 条；先回应用户最新的一条消息，再说别的；引用某句话写 [引用：原话片段]你的回复；' + (c.aiVoice ? '语音单独一行写 [语音：说的话]（每次最多 1 条）；' : '') + '表情包写 [表情包：名称]；不要输出 JSON，也不要输出任何英文思考或说明。';
+    : '格式提醒：每条消息单独一行，最多 20 条；先回应用户最新的一条消息，再说别的；引用某句话写 [引用：原话片段]你的回复；' + (c.aiVoice ? '语音单独一行写 [语音：说的话]（每次最多 1 条）；' : '') + '表情包写 [表情包：名称]；最终必须按主提示词给出的 JSON 对象格式输出，不要输出任何英文思考或说明。';
   if (!L.length) return tail;
   return '【背景资料——只有你知道，不是聊天内容。除非和用户正在聊的话题有关，否则不要提起，更不要复述这些提示。】\n' + L.join('\n\n') + '\n\n' + tail;
 }
@@ -399,21 +394,69 @@ function parseReplyLines(lines, pool, voiceOn) {
 }
 /* 模型偶尔会输出 JSON（[{type:'voice_message',…}]）：还原成我们的行格式，再走同一套渲染 */
 function jsonReplyToLines(text) {
-  var t = String(text || '').trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+  var t = String(text || '').trim().replace(/^\x60{3}(?:json)?\s*/i, '').replace(/\s*\x60{3}$/, '');
   if (!/^[\[{]/.test(t)) return null;
   var j; try { j = JSON.parse(t); } catch (e) { return null; }
-  var arr = Array.isArray(j) ? j : (j && Array.isArray(j.messages) ? j.messages : (j && typeof j === 'object' ? [j] : null));
-  if (!arr || !arr.length || !arr.every(function (x) { return x && typeof x === 'object' && (x.type || x.content || x.text); })) return null;
+  var arr = Array.isArray(j) ? j : (j && Array.isArray(j.chatResponse) ? j.chatResponse : (j && Array.isArray(j.messages) ? j.messages : (j && typeof j === 'object' ? [j] : null)));
+  if (!arr || !arr.length || !arr.every(function (x) { return x && typeof x === 'object' && (x.type || x.content != null || x.text != null); })) return null;
   var lines = [];
   arr.forEach(function (x) {
-    var ty = String(x.type || 'text').toLowerCase(), c = x.content != null ? x.content : (x.text != null ? x.text : (x.message != null ? x.message : ''));
-    c = String(c).trim(); if (!c && ty !== 'sticker') return;
-    if (/voice/.test(ty)) lines.push('[语音：' + c + ']');
-    else if (/quote/.test(ty)) { var qt = x.quote || x.quote_content || x.quoted || x.reply_to || ''; if (qt && typeof qt === 'object') qt = qt.content || qt.text || ''; lines.push(qt ? '[引用：' + String(qt) + ']' + c : c); }
-    else if (/sticker/.test(ty)) lines.push('[表情包：' + (x.name || x.meaning || c) + ']');
-    else lines.push(c);
+    var ty = String(x.type || 'text').toLowerCase();
+    var c = x.content != null ? x.content : (x.text != null ? x.text : (x.message != null ? x.message : ''));
+    c = String(c).trim();
+    if (/sticker/.test(ty)) { lines.push('[表情包：' + String(x.sticker_name || x.name || x.meaning || c).trim() + ']'); return; }
+    if (/voice/.test(ty)) { if (c) lines.push('[语音：' + c + ']'); return; }
+    if (/quote/.test(ty)) {
+      var qt = x.quote || x.quote_content || x.quoted || x.reply_to || '';
+      if (qt && typeof qt === 'object') qt = qt.content || qt.text || '';
+      if (qt) lines.push('[引用：' + String(qt) + ']' + c); else if (c) lines.push(c);
+      return;
+    }
+    if (c) lines.push(c);
   });
   return lines.length ? lines.join('\n') : null;
+}
+/* 结构化响应适配层：把 JSON 动作转换为旧版内部标记，后续仍走原有渲染、落库和兼容逻辑。
+ * 旧版标签/数组格式继续由原解析器兜底；不新增 innerVoice 功能。 */
+function parseStructuredResponse(text) {
+  var t = String(text || '').trim().replace(/^\x60{3}(?:json)?\s*/i, '').replace(/\s*\x60{3}$/, '');
+  if (!/^[{]/.test(t)) return null;
+  var j; try { j = JSON.parse(t); } catch (e) { return null; }
+  if (!j || typeof j !== 'object' || Array.isArray(j) || !Array.isArray(j.chatResponse)) return null;
+  var body = jsonReplyToLines(t) || '';
+  var a = j.actions && typeof j.actions === 'object' ? j.actions : {};
+  var tags = [];
+  var status = a.status || j.status;
+  if (status && typeof status === 'object' && ['online','busy','away','sleeping'].indexOf(status.type) !== -1) {
+    tags.push('<状态>' + JSON.stringify({ type: status.type, text: String(status.text || '').slice(0,16) }) + '</状态>');
+  }
+  var thought = a.thought || j.thought;
+  if (thought && typeof thought === 'object') {
+    tags.push('<心声>' + JSON.stringify({ heartfeltVoice: String(thought.heartfeltVoice || '').slice(0,40), randomJottings: String(thought.randomJottings || '').slice(0,120) }) + '</心声>');
+  }
+  var moments = a.moments || j.moments;
+  if (moments && typeof moments === 'object') {
+    var md = { post: typeof moments.post === 'string' ? moments.post.slice(0,100) : '', likes: Array.isArray(moments.likes) ? moments.likes : [], comments: Array.isArray(moments.comments) ? moments.comments.slice(0,4) : [] };
+    tags.push('<朋友圈>' + JSON.stringify(md) + '</朋友圈>');
+  }
+  var social = Array.isArray(a.social) ? a.social : (Array.isArray(a.socialActions) ? a.socialActions : (Array.isArray(j.social) ? j.social : []));
+  social.forEach(function (x) {
+    if (!x || typeof x !== 'object') return;
+    var ty = String(x.type || '').toLowerCase();
+    if (ty === 'pat') tags.push('[拍一拍]');
+    else if (ty === 'transfer') {
+      var n = Math.round(Number(x.amount) * 100) / 100;
+      if (n > 0 && isFinite(n)) tags.push('[转账:' + n + ':' + String(x.note || '').replace(/[\]\r\n]/g,' ').slice(0,80) + ']');
+    } else if (ty === 'accept') tags.push('[收款]');
+    else if (ty === 'refund') tags.push('[退还]');
+  });
+  var music = Array.isArray(a.music) ? a.music : [];
+  music.forEach(function (x) {
+    if (!x || typeof x !== 'object') return;
+    if (x.type === 'next') tags.push('[CMD:NEXT_SONG]');
+    else if (x.type === 'play' && x.name) tags.push('[CMD:PLAY_SONG:' + String(x.name).replace(/[\]\r\n]/g,' ').slice(0,100) + ']');
+  });
+  return { text: body + (tags.length ? '\n' + tags.join('\n') : ''), data: j };
 }
 
 /* 一条历史消息 -> 给模型看的文字 */
@@ -2189,7 +2232,7 @@ async function openVoiceRecorder() {
 }
 /* 底栏「＋」：向上展开一列悬浮圆（语音 / 音频文件 / 图片 / 一起听 / 看手机），做法和右上角 ⋯ 一样 */
 /* ---------- 拍一拍 / 转账（双向）+ 经期 ---------- */
-var ACT_RULES = '想拍一拍用户时，另起一行只写 [拍一拍]；想给用户转账，另起一行写 [转账:金额:备注]（金额是数字，备注可省略）；用户转给你的钱（聊天里显示为「[转账 …]」且还没处理），你决定收下就另起一行写 [收款]，不想收就写 [退还]。这些标记不是聊天内容，不要解释它们，也不必每次都用，只在合适、符合角色时才用。';
+var ACT_RULES = '需要拍一拍、转账、收款或退还转账时，使用 actions.social 数组：{type:pat}、{type:transfer,amount,note?}、{type:accept}、{type:refund}。金额必须为正数；只在符合角色和情境时使用。动作不属于聊天正文。';
 /* 从回复里拆出动作标记，返回 { reply, acts:[{k:'pat'|'transfer'|'accept'|'refund', amount, note}] } */
 function extractActions(text) {
   var t = String(text || ''), acts = [];
@@ -2706,10 +2749,15 @@ async function buildPrompt(char) {
   var apiMsgs = toApiMessages(history, { wav: wavs, timeAware: char.timeAware !== false });
   var lastAiMsg = lastAi >= 0 ? history[lastAi] : null, gap = lastAiMsg && lastAiMsg.ts ? Date.now() - lastAiMsg.ts : 0;
   var hasVoice = history.some(function (m) { return m.type === 'voice' && m.role === 'user' && m.meta && m.meta.audio; });
-  var scan = history.slice(-settings.scanDepth).map(msgToText);
   var allBooks = await dbAll('worldBooks');
   var books = allBooks.filter(function (b) { return (char.worldBookIds || []).indexOf(b.id) !== -1; });
-  var entries = triggeredEntries(books, scan, settings.worldBookMaxChars);
+  var entries = [];
+  books.forEach(function (b) {
+    (b.entries || []).forEach(function (e) {
+      if (e.enabled === false || !e.content) return;
+      entries.push({ book: b.name || '世界书', title: e.title || '', content: String(e.content), always: true });
+    });
+  });
   var mem = memForPrompt(await memLoad(char.id));
   var thought = null;
   if (char.injectThought) {
@@ -2792,7 +2840,9 @@ async function generateReply(fresh) {
     });
     if (!r.active || r.won) return;
     var dict = extractDictation(text);   /* 用户语音的文字也随回复一起回来，不另外请求 */
-    var mc = extractMusicCmd(dict.reply);   /* [CMD:…] 先抽掉，不显示 */
+    var structured = parseStructuredResponse(dict.reply);
+    var normalizedReply = structured ? structured.text : dict.reply;
+    var mc = extractMusicCmd(normalizedReply);   /* 结构化 music 动作与旧 [CMD:…] 统一处理 */
     var ac = extractActions(mc.reply);   /* [拍一拍] [转账] [收款] 也随回复回来 */
     var mo = extractMoments(ac.reply);   /* 朋友圈互动也随回复一起回来 */
     var st = extractStatus(mo.reply);
