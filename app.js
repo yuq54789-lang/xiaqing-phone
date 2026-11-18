@@ -92,7 +92,7 @@ function countMessagesAfter(cid, ts) {
 var TTS_TAGS = ['笑', '轻笑', '咯咯笑', '叹气', '惊呼', '吸气', '呼气', '喘息', '耳语', '唱歌', '哼歌', '结巴', '停顿', '哭声', '抽泣', '呜咽', '呻吟', '清嗓', '咳嗽', '吸鼻子', '咂嘴', '啧嘴', '打哈欠', '打喷嚏', '打嗝', '吞咽', '闷哼', '冷笑', '哼鼻子'];
 /* 语音条里显示的文字：去掉所有半角/全角方括号及里面的声音标签（传给 TTS 的仍保留标签） */
 function stripVoiceTags(t) { return String(t || '').replace(/[\[［][^\]］]+[\]］]/g, '').replace(/\s{2,}/g, ' ').trim(); }
-var OUTPUT_RULES = '像真人在手机上聊天一样回复：口语化，简短自然。\n把回复拆成几条短消息，每条消息单独一行（最多 20 条）。\n想引用用户说过的某句话来回复时，在那条消息开头写 [引用：用户原话片段]，后面接你的回复，同一行；偶尔用就好。\n格式铁律：不要输出 JSON；语音必须写成单独一行的 [语音：…]，引用必须写成 [引用：…]后接回复，不能把它们当成普通文字写出来或写成别的格式。\n不要在开头写你的名字，不要写旁白、括号动作或解释，除非角色设定要求这样。\n始终保持角色设定，不要承认自己是 AI。\n只输出角色说的话：不要输出你的思考、写作计划或英文说明（比如 “Let\'s write a natural response.”），回复一开头就是角色的话。';
+var OUTPUT_RULES = '像真人在手机上聊天一样回复：口语化，简短自然。\n把回复拆成几条短消息，每条消息单独一行（最多 20 条）。\n想引用用户说过的某句话来回复时，在那条消息开头写 [引用：用户原话片段]，后面接你的回复，同一行；只引用用户最近几条里的话，偶尔用就好，不要去翻很早以前的旧消息来引用。\n格式铁律：不要输出 JSON；语音必须写成单独一行的 [语音：…]，引用必须写成 [引用：…]后接回复，不能把它们当成普通文字写出来或写成别的格式。\n不要在开头写你的名字，不要写旁白、括号动作或解释，除非角色设定要求这样。\n每次开口都要根据当前的话题和心情自然起头，不要沿用上一条或最近几条的开头词、句式和口头禅。\n始终保持角色设定，不要承认自己是 AI。\n只输出角色说的话：不要输出你的思考、写作计划或英文说明（比如 “Let\'s write a natural response.”），回复一开头就是角色的话。';
 /* 线下模式：面对面的小说式叙述，不拆气泡、不发表情包 */
 var OFFLINE_RULES = '现在是线下场景，你和用户面对面相处，不再是手机聊天。\n用小说式的叙述回复：用第三人称写角色的动作、神态、环境，对白用「」括起来，连贯地写成一段或几段文字。\n篇幅 {{MIN}} 到 {{MAX}} 字，一次写完，不要拆成多条消息，不要发表情包，不要用你的名字做开头。\n只写角色自己的言行和感受，不要替用户说话、替用户做动作。\n始终保持角色设定，不要承认自己是 AI。';
 /* 线下模式的完整规则 = 内置规则（字数按角色设置填） + 你选的预设（文风/格式要求） */
@@ -111,7 +111,8 @@ var DEFAULTS = {
   baseUrl: '', apiKey: '', model: '', temperature: 0.8,
   stream: false, themeId: 'default', customCss: '', homeBg: '', fontUrl: '', fontData: '', fontName: '',
   secBaseUrl: '', secApiKey: '', secModel: '',
-  scanDepth: 5, worldBookMaxChars: 6000, memoryLimit: 20, summaryMax: 200, defaultContext: 30, ctxWindow: 25, ctxStep: 10, rollMax: 600, recallMax: 3, depthRole: 'user', depthPos: 2, stickerPromptLimit: 60, autoReply: false, period: null, myProfile: null, musicApi: '', musicApiBackup: '', apiPresets: [], activePresetId: null, weather: null, homeLayout: null,
+  scanDepth: 5, worldBookMaxChars: 6000, defaultContext: 30, ctxWindow: 25, ctxStep: 30,
+  segMax: 300, profileMax: 800, memCompressAt: 6000, memStageMax: 1500, memAutoCompress: true, memConfirm: false, memTemp: 0.2, tokBudgetOn: false, tokBudget: 60000, maxOutTokens: 0, depthRole: 'system', depthPos: 5, stickerPromptLimit: 60, autoReply: false, period: null, myProfile: null, musicApi: '', musicApiBackup: '', apiPresets: [], activePresetId: null, weather: null, homeLayout: null,
   bubbleSlow: 1,                 /* 气泡出现速度倍数：1=默认，越大越慢 */
   notifyUrl: '', notifyName: '', /* 消息提示音（网址 / 上传的文件名） */
   clockLayout: 'h', clockColor: '', dateColor: '', wxColor: '', clockDy: 0, dateDy: 0, wxDy: 0, clockDx: 0, dateDx: 0, wxDx: 0,   /* 时钟：横/竖排、三处文字颜色、三处上下及左右位置（互不绑定） */
@@ -151,86 +152,91 @@ function triggeredEntries(books, texts, maxChars) {
   return out;
 }
 
-/* 记忆：最新一条精炼 + 它之后的自动总结 + 所有手动记忆，最多 limit 条 */
-function pickMemories(mems, limit) {
-  var refined = null;
-  mems.forEach(function (m) { if (m.kind === 'refined' && (!refined || m.ts > refined.ts)) refined = m; });
-  var rest = mems.filter(function (m) {
-    if (m.kind === 'refined') return false;
-    if (m.kind === 'note') return true;
-    return !refined || m.ts > refined.ts;
-  }).sort(function (a, b) { return a.ts - b.ts; });
-  rest = rest.slice(-limit);
-  return (refined ? [refined] : []).concat(rest);
+/* ====================================================================
+ * 记忆 v2（总结 / 固定信息 / 二次压缩 / 提示词注入）
+ * 全部存在 memories 表里，一条记录 = 一条记忆，靠字段区分类型：
+ *   固定信息  kind:'profile'，id 固定为 'profile-' + 角色id，每个角色只有 1 条（称呼、生日、喜好、忌口、约定……）
+ *   手写记忆  kind:'note'（旧数据里带 core 标记的也算）——每次都带
+ *   分段摘要  kind:'summary', seg:true, from/to = 这一段原话的起止时间——每次都带，按时间从早到晚
+ *   阶段摘要  kind:'summary', stage:true, merged:[被合并的条目 id]——二次压缩的产物，带法和分段摘要一样
+ *   旧版总结  kind:'summary' / 'refined'（没有 seg / stage 标记）——带法和分段摘要一样
+ *   待确认    pending:true（开了「总结先确认」时的草稿，确认前不进提示词）
+ *   已归档    archived:true, mergedInto:阶段摘要的 id（被二次压缩合并掉的原条目：不进提示词，记忆页里能看到、能撤销合并）
+ * 没有关键词匹配、没有随机抽取：带哪些记忆完全由上面的类型决定，每次都一样。
+ * ==================================================================== */
+var MEM_KEEP_NEWEST = 3;   /* 自动二次压缩时，最新的几条不动 */
+function memNum(v, def, min, max) { var n = Number(v); if (v === '' || v == null || !isFinite(n)) return def; return Math.min(max, Math.max(min, n)); }
+function memKey(m) { return Number(m.to) || Number(m.ts) || 0; }
+function memClass(m) {
+  if (m.kind === 'profile') return 'profile';
+  if (m.archived) return 'archived';
+  if (m.kind === 'note' || m.core) return 'manual';
+  if (m.pending) return 'pending';
+  return 'auto';
+}
+function memCollect(rows) {
+  var o = { profile: null, manual: [], auto: [], pending: [], archived: [] };
+  (rows || []).forEach(function (m) {
+    var k = memClass(m);
+    if (k === 'profile') { if (!o.profile || (m.ts || 0) > (o.profile.ts || 0)) o.profile = m; }
+    else o[k].push(m);
+  });
+  var asc = function (a, b) { return memKey(a) - memKey(b) || (a.ts || 0) - (b.ts || 0); };
+  ['manual', 'auto', 'pending', 'archived'].forEach(function (k) { o[k].sort(asc); });
+  return o;
+}
+function memText(m) { return String(m.content || '').trim(); }
+/* 要带进提示词的记忆（只看类型，不看聊天内容） */
+function memForPrompt(rows) {
+  var c = memCollect(rows), has = function (m) { return !!memText(m); };
+  return { profile: c.profile ? memText(c.profile) : '', manual: c.manual.filter(has), auto: c.auto.filter(has), pending: c.pending.length, archived: c.archived.length };
+}
+function memDay(ts) { var d = new Date(ts); return d.getFullYear() + '年' + (d.getMonth() + 1) + '月' + d.getDate() + '日'; }
+/* 一条摘要对应的日期：同一天写一天，跨天写「起～止」；旧的合并摘要不知道起点就写「截至…」 */
+function memLabel(m) {
+  var a = Number(m.from) || 0, b = Number(m.to) || Number(m.ts) || 0;
+  if (!b) return '';
+  if (!a) return m.stage ? '截至' + memDay(b) : memDay(b);
+  var x = memDay(a), y = memDay(b); return x === y ? x : x + '～' + y;
+}
+function memLine(m) { var l = memLabel(m); return (l ? '[' + l + '] ' : '') + memText(m); }
+function memChars(list) { return list.reduce(function (n, m) { return n + memText(m).length; }, 0); }
+/* 给总结模型看的聊天记录：每换一天插一行日期，让它写得出「几月几号发生了什么」 */
+function memTranscript(msgs, char) {
+  var me = char.userNickname || '用户', her = char.realName || char.name, last = '', out = [];
+  msgs.forEach(function (m) {
+    if (m.type === 'pat') return;
+    var d = memDay(m.ts); if (d !== last) { out.push('—— ' + d + ' ——'); last = d; }
+    out.push((m.role === 'assistant' ? her : me) + '：' + msgToText(m));
+  });
+  return out.join('\n');
+}
+/* 解析总结模型的输出：【本段摘要】+【固定信息】，顺序不限；没写标记就把整段当摘要；固定信息写「无」就当没变化 */
+function parseMemOut(out) {
+  var t = String(out || '').trim(), re = /【\s*(本段摘要|固定信息)\s*】/g, marks = [], m;
+  while ((m = re.exec(t))) marks.push({ name: m[1], start: m.index, end: m.index + m[0].length });
+  if (!marks.length) return { seg: t, profile: null };
+  var parts = {};
+  marks.forEach(function (mk, i) { var next = marks[i + 1] ? marks[i + 1].start : t.length; if (parts[mk.name] == null) parts[mk.name] = t.slice(mk.end, next).trim(); });
+  var seg = (parts['本段摘要'] || '').replace(/^[：:\s]+/, '').trim();
+  var pr = parts['固定信息'] == null ? null : parts['固定信息'].replace(/^[：:\s]+/, '').trim();
+  if (pr !== null && (!pr || /^[（(【\[]?\s*无\s*[）)】\]]?[。.]?$/.test(pr))) pr = null;
+  return { seg: seg, profile: pr };
+}
+/* 固定信息的「已有」版本：已确认的那份，加上还没确认的草稿里更新的那几次（这样连续总结时不会互相覆盖） */
+function memProfilePrior(rows, cid) {
+  var base = null; (rows || []).forEach(function (m) { if (m.kind === 'profile' && (!base || (m.ts || 0) > (base.ts || 0))) base = m; });
+  var text = base ? memText(base) : '', src = base ? (base.srcTs || 0) : 0;
+  (rows || []).filter(function (m) { return m.pending && m.profile != null; }).sort(function (a, b) { return (a.ts || 0) - (b.ts || 0); })
+    .forEach(function (m) { if ((m.ts || 0) > src) { text = String(m.profile || '').trim(); src = m.ts || 0; } });
+  return text;
 }
 
-/* 三层记忆：①常驻（core）每次都带 ②最近 N 条记忆（滑动窗口）每次都带 ③更早的历史记忆库——用当前聊天里的关键词在本地匹配，匹配到才带入 */
-var STOPCH = '的了是我你他她它在有和就不也都吗吧呢啊嗯哦这那一个什么么着过到说要会可以还很';
-var COMMON_BI = ['今天','明天','昨天','觉得','知道','时候','现在','已经','因为','所以','但是','如果','可是','还是','没有','自己','真的','感觉','一下','一起','出来','起来','东西','怎么','然后','应该','可能','不会','我们','你们','他们','她们','开始','不过','其实','比较','一点','有点','今晚','晚上','早上','最近'];
-function memTokens(text) {
-  var set = {}, t = String(text || '').toLowerCase();
-  (t.match(/[\u4e00-\u9fff]+/g) || []).forEach(function (run) {
-    for (var i = 0; i < run.length - 1; i++) {
-      var a = run.charAt(i), b = run.charAt(i + 1);
-      if (STOPCH.indexOf(a) >= 0 || STOPCH.indexOf(b) >= 0 || COMMON_BI.indexOf(a + b) >= 0) continue;
-      set[a + b] = 1;
-    }
-  });
-  (t.match(/[a-z0-9]{3,}/g) || []).forEach(function (w) { set[w] = 2; });
-  return set;
-}
-function selectMemories(mems, queryTexts, windowSize, matchLimit) {
-  var byTs = function (a, b) { return a.ts - b.ts; };
-  var core = mems.filter(function (m) { return m.core; }).sort(byTs);
-  var rest = mems.filter(function (m) { return !m.core; }).sort(byTs);
-  var n = windowSize > 0 ? windowSize : 20;
-  var recent = rest.slice(-n), older = rest.slice(0, Math.max(0, rest.length - n));      /* 第二层：最近 N 条记忆；第三层：更早的历史记忆库 */
-  var q = memTokens((queryTexts || []).join('\n')), keys = Object.keys(q), scored = [];
-  older.forEach(function (m) {
-    var c = String(m.content || '').toLowerCase(), sc = 0;
-    keys.forEach(function (k) { if (c.indexOf(k) >= 0) sc += q[k]; });
-    if (sc >= 1) scored.push({ m: m, s: sc });
-  });
-  scored.sort(function (a, b) { return b.s - a.s || b.m.ts - a.m.ts; });
-  var matched = scored.slice(0, matchLimit || 8).map(function (x) { return x.m; }).sort(byTs);
-  return { core: core, recent: recent, matched: matched, all: core.concat(matched, recent) };
-}
-
-/* ---- 上下文：短期窗口 + 总结指针 + 滚动前情提要（仿酒馆） ---- */
+/* ---- 上下文：短期窗口 + 总结指针（窗口之外、已经总结过的原话不再混进聊天记录） ---- */
 function ctxParams(char) {
   var W = char.contextLimit > 0 ? char.contextLimit : (Number(settings.ctxWindow) > 0 ? Number(settings.ctxWindow) : 25);
-  var am = char.autoMemory || {}, S = am.step > 0 ? am.step : (Number(settings.ctxStep) > 0 ? Number(settings.ctxStep) : 10);
+  var am = char.autoMemory || {}, S = am.step > 0 ? am.step : (Number(settings.ctxStep) > 0 ? Number(settings.ctxStep) : 30);
   return { W: Math.max(2, Math.floor(W)), S: Math.max(1, Math.floor(S)), auto: !!am.enabled };
-}
-/* 要带进提示词的记忆：有「前情提要」→ 常驻 + 手写记忆 + 前情提要（旧的逐条总结已并进提要，不再带）；还没有 → 沿用旧的三层 */
-function injectMemories(mems, queryTexts, windowSize) {
-  var byTs = function (a, b) { return a.ts - b.ts; }, roll = null, tags = {};
-  mems.forEach(function (m) { if (m.roll && (!roll || m.ts > roll.ts)) roll = m; });
-  if (!roll) {
-    var sel = selectMemories(mems, queryTexts, windowSize);
-    sel.core.forEach(function (m) { tags[m.id] = '常驻'; }); sel.recent.forEach(function (m) { tags[m.id] = '近期'; });
-    return { memories: sel.all, roll: '', hasRoll: false, tags: tags };
-  }
-  var core = mems.filter(function (m) { return !m.roll && m.core; }).sort(byTs);
-  var notes = mems.filter(function (m) { return !m.roll && !m.core && m.kind === 'note'; }).sort(byTs).slice(-12);
-  var late = mems.filter(function (m) { return !m.roll && !m.core && m.kind !== 'note' && !m.chunk && m.ts > (roll.upTo || 0); }).sort(byTs).slice(-(windowSize > 0 ? windowSize : 20));
-  core.forEach(function (m) { tags[m.id] = '常驻'; }); notes.forEach(function (m) { tags[m.id] = '常驻'; }); late.forEach(function (m) { tags[m.id] = '近期'; }); tags[roll.id] = '前情提要';
-  return { memories: core.concat(notes, late), roll: roll.content || '', hasRoll: true, tags: tags };
-}
-
-/* 关键词回忆：只在最近的话里出现了旧总结里的词，才想起最相关的几段（不额外请求、不常驻 token） */
-function recallMemories(mems, queryTexts, limit) {
-  var roll = null; mems.forEach(function (m) { if (m.roll && (!roll || m.ts > roll.ts)) roll = m; });
-  if (!roll || !(limit > 0)) return [];
-  var pool = mems.filter(function (m) { return !m.roll && !m.core && m.kind !== 'note' && (m.chunk || m.ts <= (roll.upTo || 0)); });
-  var q = memTokens((queryTexts || []).join('\n')), keys = Object.keys(q), scored = [];
-  pool.forEach(function (m) {
-    var c = String(m.content || '').toLowerCase(), sc = 0;
-    keys.forEach(function (k) { if (c.indexOf(k) >= 0) sc += q[k]; });
-    if (sc >= 1) scored.push({ m: m, s: sc });
-  });
-  scored.sort(function (a, b) { return b.s - a.s || b.m.ts - a.m.ts; });
-  return scored.slice(0, limit).map(function (x) { return x.m; }).sort(function (a, b) { return a.ts - b.ts; });
 }
 function fmtGap(ms) {
   var m = Math.round(ms / 60000); if (m < 60) return m + ' 分钟';
@@ -250,8 +256,9 @@ function fmtTime(ts, tz) {
 }
 
 function buildSystem(ctx) {
-  var c = ctx.char, s = ctx.settings, L = [], D = !!ctx.depth;   /* D：易变的背景（世界书/心声/时间/听歌/手机动态…）不放这里，放到 buildDepth 里；格式指令放到 buildBottomFormat 紧贴最底部 */
+  var c = ctx.char, s = ctx.settings, L = [], D = !!ctx.depth;   /* D：易变的背景（世界书/心声/时间/听歌/手机动态…）不放这里，放到 buildDepth 里紧贴最新消息 */
   L.push('你正在扮演「' + (c.realName || c.name) + '」，' + (c.offlineMode ? '和用户面对面相处。' : '通过手机和用户聊天。'));
+  L.push('# 角色在线状态\n每次回复结束时，额外输出一段状态标记，必须严格使用以下格式：<状态>{"type":"online","text":"刚刚在和你聊天"}</状态>\n状态类型只能从 online、busy、away、sleeping 中选择：online 表示在线，busy 表示忙碌，away 表示暂时离开，sleeping 表示睡眠。text 由你根据当前情绪、活动、剧情和角色设定自由编写，简短自然，最多 16 个字。状态类型不必每次改变，只有符合当前情境时才切换。状态标记必须放在整条回复的最后，不要放进聊天正文，也不要向用户解释这个标记。');
   if (c.persona) L.push('# 角色设定\n' + c.persona);
   var me = [];
   if (c.userNickname) me.push('你称呼用户为：' + c.userNickname);
@@ -262,10 +269,10 @@ function buildSystem(ctx) {
       return '【' + (e.title || e.book) + '】\n' + e.content;
     }).join('\n\n'));
   }
-  if (ctx.memories.length) {
-    L.push('# 长期记忆（' + (ctx.roll ? '重要且一直成立的事' : '你们之前发生的事，按时间从早到晚') + '）\n' + ctx.memories.map(function (m) { return '- ' + m.content; }).join('\n'));
-  }
-  if (ctx.roll) L.push('# 前情提要（更早的聊天已经总结成下面这段话；之后发生的原话在下面的聊天记录里）\n' + ctx.roll);
+  /* 顺序固定：世界书 → 固定信息 → 手写记忆 → 过往记忆摘要 →（后面是聊天记录）。过往摘要明确标成「背景参考」，不是现在的对话 */
+  if (ctx.profile) L.push('# 固定信息（长期成立的事实：称呼、生日、喜好、忌口、约定、关系节点）\n' + ctx.profile);
+  if (ctx.manual && ctx.manual.length) L.push('# 手写记忆（一直成立，每次都要记得）\n' + ctx.manual.map(function (m) { return '- ' + memText(m); }).join('\n'));
+  if (ctx.auto && ctx.auto.length) L.push('# 过往记忆摘要（背景参考：下面是已经发生过的事，按时间从早到晚。它们不是现在的对话，不要逐条复述，也不要把它们当成用户刚说的话；最近的聊天原话在后面）\n' + ctx.auto.map(memLine).join('\n'));
   if (!D && !c.offlineMode && ctx.stickers && ctx.stickers.length) {
     L.push('# 可发送的表情包\n想发表情包时，单独占一行，写成 [表情包：名称]，名称必须从下面选一个，不要自己编：\n' +
       ctx.stickers.map(function (st) { return st.name; }).join('、'));
@@ -281,11 +288,12 @@ function buildSystem(ctx) {
     L.push(tl);
   }
   L.push('# 回复要求\n' + (c.offlineMode ? offlineRules(c, ctx.preset) : OUTPUT_RULES));
+  if (ctx.wantThought) L.push('# 心声（附加输出）\n' + THOUGHT_RULES);
   if (ctx.musicText) L.push(ctx.musicText);
   if (!c.offlineMode) L.push('# 拍一拍与转账\n' + ACT_RULES);
   if (!D && ctx.periodText) L.push(ctx.periodText);
   if (!D && ctx.watchText) L.push(PW_RULES + ctx.watchText);
-  if (!D && ctx.momentsText) L.push(ctx.momentsText);
+  if (!D && ctx.momentsText) L.push(ctx.momentsText + '\n\n# 朋友圈（附加输出）\n' + MOMENT_RULES);
   if (ctx.changes) L.push('# 消息的变动\n用户有时会撤回、删除或编辑消息。方括号里的「[用户撤回了一条消息。撤回前的内容：…]」「[用户删除了…]」和消息后面的「（…原文是…）」就是你看到的变动，你确实知道原来写了什么。像真人一样自然地反应（好奇、调侃、装作没看见都行，看角色性格），不要机械复述这些提示，也不要每次都点破。');
   if (c.aiVoice && !c.offlineMode) L.push('# 发语音\n想发语音消息时，把那一条单独写成一行：[语音：说的话]。方括号里就是语音里说的原话（口语、带语气词），会自动显示成文字，不用再重复。偶尔用，适合轻声说话、撒娇、叹气、情绪起伏的时候；每次回复最多 1 条（多发会被语音接口限流）。\n语音文字里要自然穿插声音表情标签，必须从下面的词表里原样选用，严禁自造：' + TTS_TAGS.map(function (x) { return '[' + x + ']'; }).join('、') + '。\n示例：[语音：[轻笑]你怎么才回我呀，[叹气]我等了好久。]');
   if (ctx.dictate) L.push('# 听写（必须）\n用户发来的 ' + ctx.dictate + ' 条语音还没有文字。请在回复的最最开头，按语音出现的顺序，每条语音写一段 <听写>用户语音里说的原话</听写>（逐字写，不翻译、不润色；完全听不清就写 听不清）。写完标签再正常回复；标签里的字不要在正文里重复，标签本身用户看不到。');
@@ -294,7 +302,7 @@ function buildSystem(ctx) {
   return L.join('\n\n');
 }
 
-/* 深度注入：易变的背景资料与世界书，作为独立的一条消息插在聊天记录倒数第 N 条之前 */
+/* 深度注入：易变的背景资料，作为独立的一条消息插在聊天记录最后一条之前（不拼进用户的话） */
 function buildDepth(ctx) {
   var c = ctx.char, L = [], off = !!c.offlineMode;
   if (c.timeAware !== false) {
@@ -306,33 +314,13 @@ function buildDepth(ctx) {
   if (ctx.musicState) L.push(ctx.musicState);
   if (ctx.periodText) L.push(ctx.periodText);
   if (ctx.watchText) L.push(PW_RULES + ctx.watchText);
-  if (ctx.momentsText) L.push(ctx.momentsText);
-  if (ctx.recall && ctx.recall.length) L.push('你隐约想起以前聊过的事（和现在聊的有关才用，没关系就当没想起，也不要主动复述）：\n' + ctx.recall.map(function (m) { return '- ' + m.content; }).join('\n'));
+  if (ctx.momentsText) L.push(ctx.momentsText + '\n\n# 朋友圈（附加输出）\n' + MOMENT_RULES);
   if (ctx.entries && ctx.entries.length) L.push('相关设定（世界书，当前触发的条目）：\n' + ctx.entries.map(function (e) { return '【' + (e.title || e.book) + '】\n' + e.content; }).join('\n\n'));
   if (!off && ctx.stickers && ctx.stickers.length) L.push('可发送的表情包（想发就单独一行写 [表情包：名称]，名称只能从这里选，不要自己编）：' + ctx.stickers.map(function (st) { return st.name; }).join('、'));
-  if (!L.length) return '';
-  return '【背景资料——只有你知道，不是聊天内容。除非和用户正在聊的话题有关，否则不要提起，更不要复述这些提示。】\n' + L.join('\n\n');
-}
-
-/* 底部格式指令（Depth 0）：紧贴用户最新消息之后，集中放置防出戏约束与状态/心声/朋友圈等结构化附加输出协议 */
-function buildBottomFormat(ctx) {
-  var c = ctx.char, F = [];
-  if (c.offlineMode) {
-    F.push('请先回应用户最新的一条消息，再按线下写作要求直接以角色视角续写剧情，保持沉浸感，严禁使用AI助手口吻或输出英文思考过程。');
-  } else {
-    F.push('回复要求提醒：每条消息单独一行，最多 20 条；先回应用户最新的一条消息，再说别的；引用某句话写 [引用：原话片段]你的回复；' + (c.aiVoice ? '语音单独一行写 [语音：说的话]（每次最多 1 条）；' : '') + '表情包写 [表情包：名称]；不要输出 JSON 正文，不要输出任何英文思考或说明，直接以角色口吻说话，严禁跳出角色或以AI系统身份回复。');
-  }
-  F.push('\n# 角色在线状态与附加输出（严格按格式放在整条回复的最末尾，不要放进聊天正文，也不要向用户解释）');
-  F.push('1. 角色在线状态（每次回复必写）：<状态>{"type":"online","text":"刚刚在和你聊天"}</状态>\n状态类型只能从 online、busy、away、sleeping 中选择（online=在线，busy=忙碌，away=暂时离开，sleeping=睡眠），text 由你根据当前情绪、活动和角色设定自由编写，简短自然，最多 16 个字。');
-  var idx = 2;
-  if (ctx.wantThought) {
-    F.push(idx + '. 心声（附加输出）：\n' + THOUGHT_RULES);
-    idx++;
-  }
-  if (ctx.momentsText) {
-    F.push(idx + '. 朋友圈（附加输出）：\n' + MOMENT_RULES);
-  }
-  return F.join('\n');
+  var tail = off ? '先回应用户最新的一条消息，再按写作要求展开。'
+    : '格式提醒：每条消息单独一行，最多 20 条；先回应用户最新的一条消息，再说别的；引用某句话写 [引用：原话片段]你的回复；' + (c.aiVoice ? '语音单独一行写 [语音：说的话]（每次最多 1 条）；' : '') + '表情包写 [表情包：名称]；不要输出 JSON，也不要输出任何英文思考或说明。';
+  if (!L.length) return tail;
+  return '【背景资料——只有你知道，不是聊天内容。除非和用户正在聊的话题有关，否则不要提起，更不要复述这些提示。】\n' + L.join('\n\n') + '\n\n' + tail;
 }
 
 /* 表情包：从角色选中的分类里挑出可用的；太多时随机抽 limit 个，避免提示词过长 */
@@ -578,6 +566,8 @@ async function callLLMRaw(o) {
     var oaMsgs = o.messages.map(function (m) { return typeof m.content === 'string' ? m : { role: m.role, content: m.content.map(function (p) { return p.type === 'audio_data' ? { type: 'input_audio', input_audio: { data: p.data, format: (p.mime.split('/')[1] || 'wav') } } : p; }) }; });
     body = { model: o.model, messages: [{ role: 'system', content: o.system }].concat(oaMsgs), temperature: o.temperature, stream: !!o.stream };
   }
+  var mt = Number(o.maxTokens) > 0 ? Math.floor(Number(o.maxTokens)) : 0;   /* 单次回复上限：不填就不发，交给模型/中转的默认值；回复总被截断就填一个大一点的数 */
+  if (mt) { if (gem) body.generationConfig.maxOutputTokens = mt; else body.max_tokens = mt; }
 
   var res;
   try {
@@ -653,29 +643,39 @@ function secondaryApi() {
     model: settings.secModel || settings.model
   };
 }
-async function summarizeMessages(char, msgs, prev) {
-  var api = secondaryApi(), max = Number(settings.rollMax) > 100 ? Number(settings.rollMax) : 600;
-  var system = '你是「' + (char.realName || char.name) + '」。请站在你自己的角度，用第一人称（“我”）整理记忆。下面会先给出【已有前情提要】（可能为空），再给出【新发生的聊天记录】。' +
-    '请输出两部分，严格用下面两个标记开头，不要标题、不要分点、不要解释：\n' +
-    '【前情提要】把新内容并进已有前情提要，输出更新后的完整前情提要：保留关键事实、约定、称呼、关系和情绪变化，合并重复内容，删掉寒暄和琐碎细节，越早的内容越概括；不超过 ' + max + ' 字。\n' +
-    '【本段摘要】只概括【新发生的聊天记录】这一段发生了什么，不超过 200 字；务必保留人名、地点、物品、日期、事件名等具体词，方便以后按关键词回忆。';
-  var out = (await callLLM({ base: api.base, key: api.key, model: api.model, temperature: 0.5, system: system,
-    messages: [{ role: 'user', content: '【已有前情提要】\n' + (prev || '（空）') + '\n\n【新发生的聊天记录】\n' + transcript(msgs, char) }], stream: false })).trim();
+/* 总结：独立的一次请求（不在聊天里顺便写）。输出【本段摘要】和更新后的【固定信息】 */
+async function memSummarize(char, msgs, prior) {
+  var api = secondaryApi(), me = char.userNickname || '用户', her = char.realName || char.name;
+  var segMax = memNum(settings.segMax, 300, 100, 1500), prMax = memNum(settings.profileMax, 800, 200, 4000);
+  var system = '你是聊天记忆整理助手，只做客观记录：不扮演任何角色，不评论，不抒情，不编造。\n' +
+    '聊天双方是角色「' + her + '」和用户「' + me + '」。下面先给出【已有固定信息】（可能为空），再给出【新聊天记录】（每一天前面有一行「—— 日期 ——」）。\n' +
+    '请输出两部分，严格用下面两个标记开头，不要标题，不要其它文字：\n' +
+    '【本段摘要】用第三人称，以「' + her + '」「' + me + '」作主语，按时间顺序客观写出这段聊天里发生的事，一件事一句。必须保留：日期、人名地点物品等具体的词、做出的约定和承诺、计划、重要的决定、双方情绪的明显变化。不要写寒暄，不要写感想和评价。不超过 ' + segMax + ' 字。\n' +
+    '【固定信息】把新聊天里出现的、长期有效的信息并进已有固定信息，输出更新后的完整清单，每行一条，内容限于：称呼与昵称、生日与纪念日、喜好与厌恶、忌口与过敏、职业与作息、重要的人和关系、长期约定、双方关系的关键节点。新旧信息矛盾时以新的为准（删旧留新）；没有变化就原样照抄；确实什么都没有就只写「无」。不超过 ' + prMax + ' 字。';
+  var out = (await callLLM({ base: api.base, key: api.key, model: api.model, temperature: memNum(settings.memTemp, 0.2, 0, 1), system: system,
+    messages: [{ role: 'user', content: '【已有固定信息】\n' + (prior || '（空）') + '\n\n【新聊天记录】\n' + memTranscript(msgs, char) }], stream: false })).trim();
   if (!out) throw new Error('总结返回了空内容');
-  /* 模型写超字数也不再追加请求压缩：总结永远只请求 1 次（字数上限只写在提示词里） */
-  var mc = /【\s*本段摘要\s*】/.exec(out), roll = out, chunk = '';
-  if (mc) { roll = out.slice(0, mc.index); chunk = out.slice(mc.index + mc[0].length).trim(); }
-  roll = roll.replace(/^\s*【\s*前情提要\s*】\s*/, '').trim();
-  if (!roll) roll = prev || chunk;
-  return { roll: roll, chunk: chunk };
+  var r = parseMemOut(out);
+  if (!r.seg) throw new Error('总结没有写出「本段摘要」（模型返回：' + out.slice(0, 80).replace(/\n/g, ' ') + '）');
+  if (r.seg.length > 1500) r.seg = r.seg.slice(0, 1500);
+  if (r.profile && r.profile.length > 6000) r.profile = r.profile.slice(0, 6000);
+  return r;
 }
-async function refineMemories(char, mems, targetChars) {
-  var api = secondaryApi();
-  var system = '你是「' + (char.realName || char.name) + '」。下面是你已有的记忆，请合并、去重、按时间顺序整理成一份连贯的第一人称记忆档案。' +
-    '保留所有重要事实、约定、关系变化和关键细节，删掉重复和琐碎内容。总长度控制在约 ' + targetChars + ' 字以内，只输出整理后的正文。';
-  var body = mems.slice().sort(function (a, b) { return a.ts - b.ts; }).map(function (m) { return '- ' + m.content; }).join('\n');
-  return (await callLLM({ base: api.base, key: api.key, model: api.model, temperature: 0.4, system: system,
+/* 二次压缩：把按时间排好的几条摘要合并成一条更短的（摘要的摘要） */
+async function memMerge(char, picks, target) {
+  var api = secondaryApi(), me = char.userNickname || '用户', her = char.realName || char.name;
+  var system = '你是聊天记忆整理助手，只做客观整理：不扮演任何角色，不评论，不抒情，不编造。\n' +
+    '下面是「' + her + '」和「' + me + '」之间按时间从早到晚排列的几段记忆摘要，请合并成一份更精简的摘要：\n' +
+    '1. 第三人称，保持时间顺序，每件事尽量保留日期。\n' +
+    '2. 保留：具体事件、约定和承诺、重要决定、人名地点物品、情绪的转折。\n' +
+    '3. 合并重复内容，删掉寒暄和琐碎细节；越早的内容可以越概括。\n' +
+    '4. 不写感想和评价，不添加原文没有的内容。\n' +
+    '5. 总长度不超过 ' + target + ' 字。只输出整理后的正文，不要标题和解释。';
+  var body = picks.map(function (m) { return '【' + (memLabel(m) || '日期不详') + '】' + memText(m); }).join('\n\n');
+  var out = (await callLLM({ base: api.base, key: api.key, model: api.model, temperature: memNum(settings.memTemp, 0.2, 0, 1), system: system,
     messages: [{ role: 'user', content: body }], stream: false })).trim();
+  if (!out) throw new Error('压缩返回了空内容');
+  return out;
 }
 
 /* 心声：让角色根据最近的聊天，写下此刻没说出口的想法 */
@@ -732,7 +732,7 @@ function extractMoments(text) {
 }
 
 /* 导出给测试用 */
-if (typeof module !== 'undefined') module.exports = { extractMusicCmd: extractMusicCmd, extractMoments: extractMoments, extractThought: extractThought, offlineRules: offlineRules, selectMemories: selectMemories, triggeredEntries: triggeredEntries, pickMemories: pickMemories, buildSystem: buildSystem, buildDepth: buildDepth, buildBottomFormat: buildBottomFormat, injectMemories: injectMemories, ctxParams: ctxParams, muRulesText: muRulesText, muStateText: muStateText, msgToText: msgToText, toApiMessages: toApiMessages, splitReply: splitReply, parseThought: parseThought, openaiUrl: openaiUrl, stickerPool: stickerPool, sampleStickers: sampleStickers, parseReplyLines: parseReplyLines, findSticker: findSticker };
+if (typeof module !== 'undefined') module.exports = { extractMusicCmd: extractMusicCmd, extractMoments: extractMoments, extractThought: extractThought, offlineRules: offlineRules, triggeredEntries: triggeredEntries, buildSystem: buildSystem, buildDepth: buildDepth, memForPrompt: memForPrompt, memCollect: memCollect, parseMemOut: parseMemOut, memLabel: memLabel, memLine: memLine, memProfilePrior: memProfilePrior, memTranscript: memTranscript, ctxParams: ctxParams, muRulesText: muRulesText, muStateText: muStateText, msgToText: msgToText, toApiMessages: toApiMessages, splitReply: splitReply, parseThought: parseThought, openaiUrl: openaiUrl, stickerPool: stickerPool, sampleStickers: sampleStickers, parseReplyLines: parseReplyLines, findSticker: findSticker };
 
 /* ---------- ⑤ 界面 ---------- */
 var $ = function (id) { return document.getElementById(id); };
@@ -2675,6 +2675,16 @@ async function audioToWavB64(dataUri) {
   var bytes = new Uint8Array(out.buffer), str = ''; for (var q = 0; q < bytes.length; q += 8192) str += String.fromCharCode.apply(null, bytes.subarray(q, q + 8192));
   return btoa(str);
 }
+/* 一条发给模型的消息大概多少 token（图片、语音按多模态估算，不把 base64 当文字数） */
+function estApiMsg(m) {
+  if (typeof m.content === 'string') return estTokens(m.content) + 4;
+  return 4 + m.content.reduce(function (k, part) {
+    if (part.type === 'text') return k + estTokens(part.text);
+    if (part.type === 'image_url') return k + 600;
+    if (part.type === 'audio_data') return k + Math.max(1, Math.round(String(part.data || '').length * 0.75 / 32000)) * 32;
+    return k;
+  }, 0);
+}
 /* 组装提示词 */
 async function buildPrompt(char) {
   var P = ctxParams(char), ptr = char.lastSummaryTs || 0;
@@ -2700,8 +2710,7 @@ async function buildPrompt(char) {
   var allBooks = await dbAll('worldBooks');
   var books = allBooks.filter(function (b) { return (char.worldBookIds || []).indexOf(b.id) !== -1; });
   var entries = triggeredEntries(books, scan, settings.worldBookMaxChars);
-  var memRows = await dbByIndex('memories', 'byChar', char.id), qTexts = history.slice(-4).map(msgToText);
-  var inj = injectMemories(memRows, qTexts, settings.memoryLimit), mems = inj.memories, recall = recallMemories(memRows, qTexts, Number(settings.recallMax) >= 0 ? Number(settings.recallMax) : 3);
+  var mem = memForPrompt(await memLoad(char.id));
   var thought = null;
   if (char.injectThought) {
     var th = (await dbAllWithKeys('thoughts')).map(function (r) { return r.value; }).filter(function (t) { return t.characterId === char.id; }).sort(function (a, b) { return b.ts - a.ts; })[0];
@@ -2724,20 +2733,27 @@ async function buildPrompt(char) {
   var muCtx = await muPromptCtx(char);   /* 一起听：只有绑定了这个角色才有 */
   var pool = stickerPool(await dbAll('stickers'), char.stickerCategoryIds);
   var shown = sampleStickers(pool, settings.stickerPromptLimit);
-  var sctx = { gap: gap, char: char, settings: settings, entries: entries, memories: mems, roll: inj.roll, recall: recall, stickers: shown, thought: thought, preset: preset, wantThought: wantThought, momentsText: moCtx ? moCtx.text : '', periodText: char.periodOn ? periodPromptText() : '', watchText: pwCtx ? pwCtx.text : '', musicText: muCtx ? muRulesText(muCtx) : '', musicState: muCtx ? muStateText(muCtx) : '', voice: audioUsed ? 'audio' : hasVoice, dictate: dictIds.length, changes: changes, now: Date.now(), depth: true };
-  var system = buildSystem(sctx), depthText = buildDepth(sctx), bottomFormat = buildBottomFormat(sctx);
-  /* 深度注入：背景资料与世界书作为独立一条消息，插在倒数第 N 条消息之前（默认 2：即紧贴用户最新消息之前）；默认 user 角色避免触发系统警觉 */
+  var sctx = { gap: gap, char: char, settings: settings, entries: entries, profile: mem.profile, manual: mem.manual, auto: mem.auto.slice(), stickers: shown, thought: thought, preset: preset, wantThought: wantThought, momentsText: moCtx ? moCtx.text : '', periodText: char.periodOn ? periodPromptText() : '', watchText: pwCtx ? pwCtx.text : '', musicText: muCtx ? muRulesText(muCtx) : '', musicState: muCtx ? muStateText(muCtx) : '', voice: audioUsed ? 'audio' : hasVoice, dictate: dictIds.length, changes: changes, now: Date.now(), depth: true };
+  var system = buildSystem(sctx), depthText = buildDepth(sctx), trim = null;
+  /* 总 token 控制（设置里的开关，默认关）：估算 系统提示 + 背景资料 + 聊天记录，超过上限就先少带最早的过往摘要，再减最早的聊天记录（至少留 10 条）；角色设定和最新的消息永远不动 */
+  if (settings.tokBudgetOn) {
+    var maxOut = Number(settings.maxOutTokens) > 0 ? Number(settings.maxOutTokens) : 1500;
+    var budget = Math.max(2000, memNum(settings.tokBudget, 60000, 2000, 2000000) - maxOut);
+    var histTok = apiMsgs.reduce(function (n, m) { return n + estApiMsg(m); }, 0);
+    var calc = function () { return estTokens(system) + estTokens(depthText) + histTok; };
+    var tot = calc(), dMem = 0, dRows = 0;
+    while (tot > budget && sctx.auto.length) { sctx.auto.shift(); dMem++; system = buildSystem(sctx); tot = calc(); }
+    while (tot > budget && apiMsgs.length > 10) { histTok -= estApiMsg(apiMsgs.shift()); dRows++; tot = calc(); }
+    trim = { budget: budget, total: tot, mem: dMem, rows: dRows, over: tot > budget };
+  }
+  /* 深度注入：背景资料作为独立一条消息，插在倒数第 N 条消息之前（设置里「背景资料插入位置」，默认 5：前面还隔着 4 条聊天记录）；不拼进用户的话。个别中转不认中间的 system 消息时，设置里可改成 user 角色 */
   var depthIdx = -1;
   if (depthText) {
-    var dp = parseInt(settings.depthPos, 10); if (!(dp >= 1 && dp <= 30)) dp = 2;
+    var dp = parseInt(settings.depthPos, 10); if (!(dp >= 1 && dp <= 30)) dp = 5;
     depthIdx = Math.max(0, apiMsgs.length - (dp - 1));
-    apiMsgs.splice(depthIdx, 0, settings.depthRole === 'user' ? { role: 'user', content: depthText } : { role: 'system', content: depthText });
+    apiMsgs.splice(depthIdx, 0, settings.depthRole === 'user' ? { role: 'user', content: '[系统备忘，不是用户说的话]\n' + depthText } : { role: 'system', content: depthText });
   }
-  /* 底部格式指令（Depth 0）：放在整个对话列表最末尾（用户最新消息之后），集中约束格式与状态/心声/朋友圈附加标记 */
-  if (bottomFormat) {
-    apiMsgs.push({ role: settings.depthRole === 'user' ? 'user' : 'system', content: bottomFormat });
-  }
-  return { system: system, depthText: depthText, bottomFormat: bottomFormat, depthIdx: depthIdx, watchTs: pwCtx ? pwCtx.ts : 0, messages: apiMsgs, pool: pool, wantThought: wantThought, momentIds: moCtx ? moCtx.ids : null, musicOn: !!muCtx, dictIds: dictIds, stats: { history: history.length, recall: recall.length, entries: entries.length, memories: mems.length, stickers: shown.length, roll: inj.roll ? inj.roll.length : 0 } };
+  return { system: system, depthText: depthText, depthIdx: depthIdx, watchTs: pwCtx ? pwCtx.ts : 0, messages: apiMsgs, pool: pool, wantThought: wantThought, momentIds: moCtx ? moCtx.ids : null, musicOn: !!muCtx, dictIds: dictIds, stats: { history: history.length, entries: entries.length, memories: mem.manual.length + sctx.auto.length, stickers: shown.length, profile: mem.profile.length }, trim: trim };
 }
 
 /* 点「等回复」= 发一次请求。按钮永远可点：后台慢时可以再点一次，
@@ -2771,7 +2787,7 @@ async function generateReply(fresh) {
   try {
     var prompt = await buildPrompt(char); prompt.chatId = char.id;
     var text = await callLLM({
-      base: settings.baseUrl, key: settings.apiKey, model: settings.model, temperature: Number(settings.temperature),
+      base: settings.baseUrl, key: settings.apiKey, model: settings.model, temperature: Number(settings.temperature), maxTokens: Number(settings.maxOutTokens) || 0,
       system: prompt.system, messages: prompt.messages, stream: settings.stream
     });
     if (!r.active || r.won) return;
@@ -3146,48 +3162,150 @@ function showThoughtCloud(anchor) {
 /* 新心声写进数据库后调用：云朵开着就换成最新的 */
 function refreshThoughtCloud() { if (cloudEl) fillCloud(); }
 
-/* ---------- 记忆页 ---------- */
-var KIND = { summary: '总结', refined: '精炼', note: '记忆' };
+/* ---------- 记忆页 / 总结 / 二次压缩 ---------- */
+var sumBusy = {}, sumBlocked = {}, compBusy = {}, compBlocked = {};   /* sumBusy：同一角色同时只允许 1 个总结请求；sumBlocked / compBlocked：自动请求失败的时间，过一阵（总结 10 分钟、压缩 30 分钟）下一次回复才会再试一次 */
+/* 取出一个角色的全部记忆，顺便把旧版数据迁移成新结构（只有发现旧字段才写库，之后不再重复） */
+async function memLoad(cid) {
+  var rows = await dbByIndex('memories', 'byChar', cid), puts = [], seen = {};
+  rows.forEach(function (m) {
+    if (m.roll) {   /* 旧版「前情提要」→ 阶段摘要（起点不详，写「截至…」） */
+      m.stage = true; m.from = 0; m.to = Number(m.ptr) || Number(m.upTo) || m.ts; delete m.roll; delete m.ptr; delete m.upTo; delete m.chunk; puts.push(m); seen[m.id] = 1;
+    } else if (m.chunk) { m.seg = true; delete m.chunk; puts.push(m); seen[m.id] = 1; }
+  });
+  /* 旧版「精炼」：最新一条（非常驻）精炼，取代它之前的逐条总结——和旧版一样，之前那些不再带，但留在记忆页里（归档） */
+  var ref = null; rows.forEach(function (m) { if (m.kind === 'refined' && !m.core && !m.archived && (!ref || m.ts > ref.ts)) ref = m; });
+  if (ref) rows.forEach(function (m) {
+    if (m !== ref && m.kind === 'summary' && !m.seg && !m.stage && !m.core && !m.archived && (m.ts || 0) < ref.ts) { m.archived = true; m.mergedInto = ref.id; if (!seen[m.id]) puts.push(m); }
+  });
+  if (puts.length) await dbBulkPut('memories', puts);
+  return rows;
+}
+/* 把几条摘要合并成一条阶段摘要：新条目先存，原条目只是标记成归档（不删），随时能撤销 */
+async function memCompressApply(char, picks, text) {
+  var starts = picks.map(function (m) { return Number(m.from) || Number(m.ts) || 0; }).filter(Boolean);
+  var unknown = picks.some(function (m) { return m.stage && !(Number(m.from) > 0); });
+  var stage = { id: uid('mem'), characterId: char.id, kind: 'summary', stage: true, content: text, ts: Date.now(),
+    from: unknown || !starts.length ? 0 : Math.min.apply(null, starts), to: Math.max.apply(null, picks.map(memKey)), merged: picks.map(function (m) { return m.id; }) };
+  picks.forEach(function (m) { m.archived = true; m.mergedInto = stage.id; });
+  await dbBulkPut('memories', [stage].concat(picks));
+  return stage;
+}
+async function memUndoMerge(stage) {
+  var rows = await dbByIndex('memories', 'byChar', stage.characterId), back = [];
+  rows.forEach(function (m) { if (m.archived && m.mergedInto === stage.id) { delete m.archived; delete m.mergedInto; back.push(m); } });
+  if (back.length) await dbBulkPut('memories', back);
+  await dbDel('memories', stage.id);
+  return back.length;
+}
+/* 草稿确认：把它从「待确认」变成正式记忆；它带的固定信息只在没有更新的版本时才写入 */
+async function memConfirm(m) {
+  if (m.profile != null) {
+    var base = await dbGet('memories', 'profile-' + m.characterId), txt = String(m.profile || '').trim();
+    if (txt && (!base || (base.srcTs || 0) <= (m.ts || 0))) await dbPut('memories', { id: 'profile-' + m.characterId, characterId: m.characterId, kind: 'profile', content: txt, ts: Date.now(), srcTs: m.ts || 0 });
+  }
+  delete m.pending; delete m.profile; await dbPut('memories', m);
+}
+/* 过往摘要攒太多（超过设置里的字数）就把最早的几条合并：最新 3 条不动；每次最多合并两轮；失败了不影响总结本身，30 分钟后再试 */
+async function memAutoCompress(char) {
+  if (settings.memAutoCompress === false || compBusy[char.id]) return;
+  if (compBlocked[char.id] && Date.now() - compBlocked[char.id] < 30 * 60 * 1000) return;
+  compBusy[char.id] = true;
+  try {
+    for (var pass = 0; pass < 2; pass++) {
+      var auto = memCollect(await memLoad(char.id)).auto, at = memNum(settings.memCompressAt, 6000, 1000, 100000), total = memChars(auto);
+      if (total <= at) break;
+      var cand = auto.slice(0, Math.max(0, auto.length - MEM_KEEP_NEWEST)); if (cand.length < 2) break;
+      var picks = [], cum = 0;
+      for (var i = 0; i < cand.length; i++) { picks.push(cand[i]); cum += memText(cand[i]).length; if (cum >= total * 0.5 && picks.length >= 2) break; }
+      var target = Math.min(memNum(settings.memStageMax, 1500, 300, 6000), Math.max(300, Math.round(cum * 0.45)));
+      var text = await memMerge(char, picks, target);
+      if (text.length > cum * 0.9) throw new Error('压缩结果没有变短，已放弃');
+      await memCompressApply(char, picks, text);
+      toast('旧记忆已自动合并（' + picks.length + ' 条 → 1 条，原条目已归档）');
+    }
+  } catch (e) {
+    compBlocked[char.id] = Date.now();
+    toast('自动合并旧记忆失败：' + String(e.message || e).slice(0, 60) + '（原记忆都还在，30 分钟后再试）');
+  } finally { compBusy[char.id] = false; }
+}
+function memTypeName(m) {
+  if (m.stage) return '合并摘要'; if (m.seg) return '分段摘要';
+  if (m.kind === 'note') return '手写'; if (m.core) return '常驻';
+  return m.kind === 'refined' ? '旧·精炼' : '旧总结';
+}
+function memItem(m, tags) {
+  var t = h('div', { class: 't' }, h('b', { text: memLabel(m) || fmtTime(m.ts).replace(/:\d\d$/, '') }));
+  tags.forEach(function (g) { t.appendChild(h('span', { class: 'badge' + (g[1] ? ' ' + g[1] : ''), text: g[0] })); });
+  return h('div', { class: 'item', onclick: function () { editMemory(m); } }, t, h('div', { class: 'c', text: memText(m) }));
+}
+var memShowArchived = false;
 async function renderMemory() {
   if (!cur) return;
-  $('mem-title').textContent = cur.name + ' · 记忆';
-  var mems = (await dbByIndex('memories', 'byChar', cur.id)).sort(function (a, b) { return b.ts - a.ts; });
-  var inj = injectMemories(mems, [], settings.memoryLimit), injected = inj.tags;
-  var body = $('mem-body'); body.innerHTML = '';
-  body.appendChild(h('div', { class: 'group-title', text: (inj.hasRoll ? '「前情提要」（自动滚动更新的一段总结）和「常驻」记忆每次都带；「分段摘要」和之前逐条的旧总结只在聊天里出现相关关键词时才想起。共 ' + mems.length + ' 条' : '「常驻」和最近 ' + settings.memoryLimit + ' 条（近期）每次都带；更早的历史记忆只有聊天里出现相关关键词时才带入。第一次自动总结后会合并成一段「前情提要」。共 ' + mems.length + ' 条') }));
-  if (!mems.length) { body.appendChild(h('div', { class: 'empty', text: '还没有记忆。点「总结」手动生成，或在角色设置里开启自动总结。' })); return; }
-  var g = h('div', { class: 'group' });
-  mems.forEach(function (m) {
-    g.appendChild(h('div', { class: 'item', onclick: function () { editMemory(m); } },
-      h('div', { class: 't' }, h('b', { text: fmtTime(m.ts).replace(/:\d\d$/, '') }),
-        h('span', { class: 'badge' + (m.kind === 'refined' ? ' acc' : ''), text: m.roll ? '前情提要' : (m.chunk ? '分段摘要' : (KIND[m.kind] || m.kind)) }),
-        injected[m.id] ? h('span', { class: 'badge on', text: injected[m.id] }) : null),
-      h('div', { class: 'c', text: m.content })));
-  });
-  body.appendChild(g);
+  var ch = cur; $('mem-title').textContent = ch.name + ' · 记忆';
+  var rows = await memLoad(ch.id); if (!cur || cur.id !== ch.id) return;
+  var C = memCollect(rows), body = $('mem-body'); body.innerHTML = '';
+  var at = memNum(settings.memCompressAt, 6000, 1000, 100000);
+  body.appendChild(h('div', { class: 'group-title', text: '每次都会带给 TA：固定信息 + 手写记忆 + 过往摘要（按时间从早到晚）。过往摘要现在共 ' + C.auto.length + ' 条 ' + memChars(C.auto) + ' 字，超过 ' + at + ' 字会自动把最早的几条合并（原条目归档，不删）。' }));
+  var pg = h('div', { class: 'group' });
+  pg.appendChild(h('div', { class: 'item', onclick: function () { editProfile(ch); } },
+    h('div', { class: 't' }, h('b', { text: '固定信息' }), h('span', { class: 'badge on', text: '每次都带' })),
+    h('div', { class: 'c', text: C.profile && memText(C.profile) ? memText(C.profile) : '还没有。自动总结几次后会自动整理出来（称呼、生日、喜好、忌口、约定……），也可以点这里自己写。' })));
+  body.appendChild(pg);
+  if (C.pending.length) {
+    var pend = h('div', { class: 'group' });
+    pend.appendChild(h('div', { class: 'item' }, h('div', { class: 't' }, h('b', { text: '待确认 ' + C.pending.length + ' 条' }), h('span', { class: 'badge', text: '确认前不会带给 TA' })),
+      h('div', { class: 'btn-row', style: 'margin-top:6px' }, h('button', { class: 'btn primary', text: '全部确认', onclick: async function () {
+        for (var i = 0; i < C.pending.length; i++) await memConfirm(C.pending[i]); toast('已全部加入记忆'); renderMemory(); } }))));
+    C.pending.slice().reverse().forEach(function (m) { pend.appendChild(memItem(m, [['待确认', 'acc'], [memTypeName(m)]])); });
+    body.appendChild(pend);
+  }
+  if (C.manual.length) {
+    var mg = h('div', { class: 'group' });
+    C.manual.slice().reverse().forEach(function (m) { mg.appendChild(memItem(m, [[memTypeName(m)], ['每次都带', 'on']])); });
+    body.appendChild(mg);
+  }
+  if (C.auto.length) {
+    var ag = h('div', { class: 'group' });
+    C.auto.slice().reverse().forEach(function (m) { ag.appendChild(memItem(m, [[memTypeName(m), m.stage ? 'acc' : ''], ['每次都带', 'on']])); });
+    body.appendChild(ag);
+  }
+  if (!C.manual.length && !C.auto.length && !C.pending.length) body.appendChild(h('div', { class: 'empty', text: '还没有记忆。点「总结」手动生成，或在角色设置里开启自动总结。' }));
+  if (C.archived.length) {
+    body.appendChild(h('div', { class: 'group-title', style: 'cursor:pointer', text: (memShowArchived ? '▾ ' : '▸ ') + '已归档 ' + C.archived.length + ' 条（被合并掉的原条目，不会带给 TA；点一下展开/收起）', onclick: function () { memShowArchived = !memShowArchived; renderMemory(); } }));
+    if (memShowArchived) { var rg = h('div', { class: 'group' }); C.archived.slice().reverse().forEach(function (m) { rg.appendChild(memItem(m, [['已归档'], [memTypeName(m)]])); }); body.appendChild(rg); }
+  }
 }
 onShow['s-memory'] = renderMemory;
+async function editProfile(ch) {
+  var p = await dbGet('memories', 'profile-' + ch.id);
+  textSheet('固定信息', p ? memText(p) : '', [
+    { text: '保存', cls: 'primary', fn: async function (v) {
+      var t = v.trim();
+      if (!t) await dbDel('memories', 'profile-' + ch.id);
+      else await dbPut('memories', { id: 'profile-' + ch.id, characterId: ch.id, kind: 'profile', content: t, ts: Date.now(), srcTs: Date.now() });
+      if (cur && cur.id === ch.id) renderMemory(); } },
+    { text: '取消' }], '每行一条：称呼、生日、喜好、忌口、重要的人、长期约定……每次聊天都会带给 TA。你改完后，下次自动总结会在你这份的基础上更新；留空保存就是清空。');
+}
 function editMemory(m) {
-  textSheet('编辑记忆', m.content, [
-    { text: '保存', cls: 'primary', fn: async function (v) { m.content = v; await dbPut('memories', m); renderMemory(); } },
-    { text: m.core ? '取消常驻' : '设为常驻', fn: async function (v) { m.content = v; m.core = !m.core; if (!m.core) delete m.core; await dbPut('memories', m); renderMemory(); toast(m.core ? '已设为常驻，每次都会带入' : '已取消常驻'); } },
-    { text: '删除', cls: 'danger', fn: async function () { await dbDel('memories', m.id); renderMemory(); } },
-    { text: '取消' }]);
+  var btns = [];
+  if (m.pending) btns.push({ text: '确认加入记忆', cls: 'primary', fn: async function (v) { m.content = v; await memConfirm(m); renderMemory(); toast('已加入记忆'); } });
+  btns.push({ text: '保存', cls: m.pending ? '' : 'primary', fn: async function (v) { m.content = v; await dbPut('memories', m); renderMemory(); } });
+  if (m.stage && m.merged && m.merged.length) btns.push({ text: '撤销合并', fn: async function () { var n = await memUndoMerge(m); renderMemory(); toast('已恢复合并前的 ' + n + ' 条'); } });
+  if (m.archived) btns.push({ text: '恢复这一条', fn: async function () { delete m.archived; delete m.mergedInto; await dbPut('memories', m); renderMemory(); toast('已恢复，会重新带给 TA'); } });
+  btns.push({ text: '删除', cls: 'danger', fn: async function () { await dbDel('memories', m.id); renderMemory(); } });
+  btns.push({ text: '取消' });
+  textSheet('编辑记忆', m.content, btns, m.stage ? '这是几条摘要合并出来的。「撤销合并」会删掉它，并把原来的几条恢复。' : (m.archived ? '这一条已经被合并进别的摘要，不会带给 TA；「恢复这一条」会让它重新生效（可能和合并后的内容有重复）。' : ''));
 }
 $('b-mem-add').onclick = function () {
-  function add(core) { return async function (v) {
+  textSheet('新增记忆', '', [{ text: '保存', cls: 'primary', fn: async function (v) {
     if (!v.trim()) return;
-    var m = { id: uid('mem'), characterId: cur.id, content: v.trim(), ts: Date.now(), kind: 'note' }; if (core) m.core = true;
-    await dbPut('memories', m); renderMemory();
-  }; }
-  textSheet('新增记忆', '', [{ text: '保存', cls: 'primary', fn: add(false) }, { text: '保存为常驻', fn: add(true) }, { text: '取消' }],
-    '普通记忆在聊天里出现相关关键词时才会带入；「常驻」的记忆每次都带（适合核心设定和底线规则）。');
+    await dbPut('memories', { id: uid('mem'), characterId: cur.id, content: v.trim(), ts: Date.now(), kind: 'note' }); renderMemory();
+  } }, { text: '取消' }], '手写的记忆每次都会带给 TA，不会被自动合并（适合核心设定、底线规则、你想让 TA 一直记得的事）。');
 };
-var sumBusy = {}, sumBlocked = {};   /* sumBusy：同一角色同时只允许 1 个总结请求；sumBlocked：自动总结失败的时间，10 分钟内不再自动请求，过后下一次回复会再试一次 */
 /* 要总结的原话：总结指针之后、且已经溢出「短期窗口」的那些（最近 W 条留在窗口里，不总结） */
 async function sumCandidates(char) {
   var P = ctxParams(char), ptr = char.lastSummaryTs || 0;
-  var all = (await pageMessages(char.id, null, 300)).filter(function (m) { return m.ts > ptr && !m.hidden && m.type !== 'system' && m.type !== 'pat'; });
+  var all = (await pageMessages(char.id, null, 400)).filter(function (m) { return m.ts > ptr && !m.hidden && m.type !== 'system' && m.type !== 'pat'; });
   return { P: P, all: all, older: all.slice(0, Math.max(0, all.length - P.W)) };
 }
 async function summarizeNow(char, silent, force) {
@@ -3196,22 +3314,15 @@ async function summarizeNow(char, silent, force) {
   try {
     var c0 = await sumCandidates(char);
     if (c0.older.length < (force ? 1 : c0.P.S)) { if (!silent) toast('最近的消息都还在短期窗口里，暂时不用总结'); return false; }
-    var batch = c0.older.slice(0, 60);   /* 一次最多归纳 60 条，积压多了会分几次追上 */
-    var mems = await dbByIndex('memories', 'byChar', char.id), roll = null;
-    mems.forEach(function (m) { if (m.roll && (!roll || m.ts > roll.ts)) roll = m; });
-    var prev = '', upTo = 0;
-    if (roll) prev = roll.content || '';
-    else {   /* 第一次：把旧的逐条总结当作已有前情提要，一并并进去 */
-      var legacy = mems.filter(function (m) { return !m.roll && !m.core && m.kind !== 'note'; }).sort(function (a, b) { return a.ts - b.ts; });
-      prev = legacy.map(function (m) { return '- ' + m.content; }).join('\n'); if (prev.length > 6000) prev = prev.slice(-6000);
-      upTo = legacy.length ? legacy[legacy.length - 1].ts : 0;
-    }
-    var sm = await summarizeMessages(char, batch, prev), text = sm.roll;   /* 只请求这 1 次 */
-    var rec = roll || { id: uid('mem'), characterId: char.id, kind: 'summary', roll: true, upTo: upTo };
-    rec.content = text; rec.ts = Date.now(); rec.ptr = batch[batch.length - 1].ts;
+    var batch = c0.older.slice(0, 80);   /* 一次最多归纳 80 条，积压多了会分几次追上 */
+    var rows = await memLoad(char.id), prior = memProfilePrior(rows, char.id);
+    var sm = await memSummarize(char, batch, prior);   /* 只请求这 1 次 */
+    var now = Date.now(), last = batch[batch.length - 1].ts, changed = sm.profile != null && sm.profile !== prior;
+    var rec = { id: uid('mem'), characterId: char.id, kind: 'summary', seg: true, content: sm.seg, ts: now, from: batch[0].ts, to: last, n: batch.length };
+    if (settings.memConfirm) { rec.pending = true; if (changed) rec.profile = sm.profile; }
+    else if (changed) await dbPut('memories', { id: 'profile-' + char.id, characterId: char.id, kind: 'profile', content: sm.profile, ts: now, srcTs: now });
     await dbPut('memories', rec);
-    if (sm.chunk) await dbPut('memories', { id: uid('mem'), characterId: char.id, kind: 'summary', chunk: true, content: sm.chunk, ts: rec.ts + 1, from: batch[0].ts, to: batch[batch.length - 1].ts });   /* 这一段的小总结单独存档：前情提要会越压越短，旧事靠关键词从这里想起来 */
-    char.lastSummaryTs = batch[batch.length - 1].ts; await dbPut('characters', char);   /* 成功了才移动指针；失败就原样保留，不丢内容 */
+    char.lastSummaryTs = last; await dbPut('characters', char);   /* 成功了才移动指针；失败就原样保留，不丢内容 */
     sumBlocked[char.id] = false;
     return true;
   } finally { sumBusy[char.id] = false; }
@@ -3219,7 +3330,10 @@ async function summarizeNow(char, silent, force) {
 async function runSummary(char, auto) {
   if (!auto) toast('正在总结…');
   try {
-    if (await summarizeNow(char, auto, !auto)) toast(auto ? '已自动更新前情提要' : '前情提要已更新');
+    if (await summarizeNow(char, auto, !auto)) {
+      toast(settings.memConfirm ? '新摘要已生成，等你在记忆页确认' : (auto ? '已自动整理记忆' : '记忆已整理'));
+      if (!settings.memConfirm) await memAutoCompress(char);
+    }
     if ($('s-memory').classList.contains('active') && cur && cur.id === char.id) renderMemory();
   } catch (e) {
     if (auto) sumBlocked[char.id] = Date.now();   /* 记下失败时间：10 分钟内不再自动请求，过了再试一次 */
@@ -3235,21 +3349,22 @@ async function maybeAutoSummarize(char) {
     if (c0.older.length >= c0.P.S) runSummary(char, true);   /* 溢出窗口的原话攒够一个步长，才静默总结 */
   } catch (e) { toast('自动总结检查失败：' + e.message.slice(0, 60)); }
 }
+/* 精炼 = 手动二次压缩：把现在所有的过往摘要合并成一份，先给你看结果，确认才生效；原条目只是归档 */
 $('b-mem-refine').onclick = async function () {
-  var mems = pickMemories(await dbByIndex('memories', 'byChar', cur.id), 9999);
-  if (mems.length < 2) { toast('记忆太少，不需要精炼'); return; }
-  var total = mems.reduce(function (n, m) { return n + m.content.length; }, 0);
-  var inp = h('input', { type: 'number', value: Math.min(1500, Math.max(300, Math.round(total / 3))), style: 'width:100%;border:1px solid var(--line);border-radius:8px;padding:8px;background:var(--bg)' });
-  openSheet([h('h3', { text: '精炼记忆' }), h('div', { class: 'hint', style: 'color:var(--sub);font-size:13px;margin-bottom:8px', text: '把当前带入提示词的 ' + mems.length + ' 条记忆（共 ' + total + ' 字）合并成一份。生成后你可以先看看再决定是否保存，不会直接覆盖。目标字数：' }), inp,
+  var ch = cur, picks = memCollect(await memLoad(ch.id)).auto;
+  if (picks.length < 2) { toast('过往摘要太少，不需要精炼'); return; }
+  var total = memChars(picks);
+  var inp = h('input', { type: 'number', value: Math.min(memNum(settings.memStageMax, 1500, 300, 6000), Math.max(300, Math.round(total / 3))), style: 'width:100%;border:1px solid var(--line);border-radius:8px;padding:8px;background:var(--bg)' });
+  openSheet([h('h3', { text: '精炼记忆' }), h('div', { class: 'hint', style: 'color:var(--sub);font-size:13px;margin-bottom:8px', text: '把现在的 ' + picks.length + ' 条过往摘要（共 ' + total + ' 字）合并成一份。先给你看结果，确认后才生效；原来的几条只是归档，不会删除，可以在合并摘要上点「撤销合并」恢复。目标字数：' }), inp,
     h('div', { class: 'btn-row', style: 'margin-top:10px' },
       h('button', { class: 'btn primary', text: '开始精炼', onclick: async function () {
-        var target = Number(inp.value) || 1500; closeSheet(); toast('正在精炼…');
+        var target = memNum(inp.value, 1500, 100, 8000); closeSheet(); toast('正在精炼…');
         try {
-          var out = await refineMemories(cur, mems, target);
+          var out = await memMerge(ch, picks, target);
           textSheet('精炼结果（可编辑）', out, [
-            { text: '保存为精炼记忆', cls: 'primary', fn: async function (v) {
-              await dbPut('memories', { id: uid('mem'), characterId: cur.id, content: v.trim(), ts: Date.now(), kind: 'refined' }); renderMemory(); iosAlert('已保存', '精炼记忆已保存'); } },
-            { text: '放弃' }], '保存后，这条精炼记忆会取代它之前的总结带入提示词；旧记忆仍保留在列表里，不会被删除。');
+            { text: '确认合并', cls: 'primary', fn: async function (v) {
+              if (!v.trim()) return; await memCompressApply(ch, picks, v.trim()); if (cur && cur.id === ch.id) renderMemory(); iosAlert('已合并', '已合并成 1 条，原来的 ' + picks.length + ' 条已归档'); } },
+            { text: '放弃' }], '确认后，这一条会取代原来的几条带给 TA；原条目归档在记忆页最下面。');
         } catch (e) { openSheet([h('h3', { text: '精炼失败' }), h('pre', { text: e.message }), h('button', { class: 'btn', text: '关闭', onclick: closeSheet })]); }
       } }), h('button', { class: 'btn', text: '取消', onclick: closeSheet }))]);
 };
@@ -3502,10 +3617,9 @@ async function renderTokenCard(host) {
         return k;
       }, 0);
     }, 0);
-    if (p.depthText) { var dn = estTokens(p.depthText); hist -= dn + 4; parts.push({ name: '背景资料与世界书（深度注入）', n: dn }); }
-    if (p.bottomFormat) { var bn = estTokens(p.bottomFormat); hist -= bn + 4; parts.push({ name: '格式与附加状态指令（底部注入）', n: bn }); }
-    var extraMsgs = (p.depthText ? 1 : 0) + (p.bottomFormat ? 1 : 0);
-    parts.push({ name: '聊天记录（最近 ' + Math.max(0, p.messages.length - extraMsgs) + ' 条）', n: hist, hist: true });
+    if (p.trim) host.appendChild(h('div', { class: 'bt-hint', style: 'color:' + (p.trim.over ? '#c0392b' : 'var(--sub)'), text: '总 token 控制已开（上限约 ' + p.trim.budget + ' 输入 token）：' + ((p.trim.mem || p.trim.rows) ? '这次裁掉了 ' + p.trim.mem + ' 条最早的过往摘要、' + p.trim.rows + ' 行最早的聊天记录。' : '没有超出，什么都没裁。') + (p.trim.over ? '裁到底了仍然超出，请调大上限或精简角色设定。' : '') }));
+    if (p.depthText) { var dn = estTokens(p.depthText); hist -= dn + 4; parts.push({ name: '背景资料（深度注入）', n: dn }); }
+    parts.push({ name: '聊天记录（最近 ' + (p.messages.length - (p.depthText ? 1 : 0)) + ' 条）', n: hist, hist: true });
     if (media.aud) parts.push({ name: '这一轮的语音（' + media.aud + ' 条，共约 ' + media.secs + ' 秒，直接发音频）', n: media.secs * 32 });
     if (media.img) parts.push({ name: '这一轮的图片（' + media.img + ' 张）', n: media.img * 600 });
     var total = parts.reduce(function (n, x) { return n + x.n; }, 0) || 1;
@@ -3515,7 +3629,7 @@ async function renderTokenCard(host) {
       var pct = Math.round(x.n / total * 100), bar = h('div', { style: 'height:6px;border-radius:3px;background:var(--accent);opacity:' + (x.hist ? '.45' : '.9') + ';width:' + Math.max(2, pct) + '%' });
       host.appendChild(h('div', { style: 'margin:7px 0' }, h('div', { style: 'display:flex;justify-content:space-between;font-size:13px' }, h('span', { text: x.name }), h('span', { style: 'color:var(--sub)', text: x.n + '（' + pct + '%）' })), bar));
     });
-    host.appendChild(h('div', { class: 'bt-hint', text: '这是发给模型的输入部分，不含它的回复。按中文约 1.3 token/字估算，实际以你的模型分词为准。想降低就缩小「近期记忆窗口」、精炼记忆或减少上下文条数。' }));
+    host.appendChild(h('div', { class: 'bt-hint', text: '这是发给模型的输入部分，不含它的回复。按中文约 1.3 token/字估算，实际以你的模型分词为准。想降低就缩小「短期窗口」、点记忆页的「精炼」，或在设置里开「控制发给模型的总 token」。' }));
     host.appendChild(h('button', { class: 'btn', style: 'margin-top:8px', text: '重新计算', onclick: function () { renderTokenCard(host); } }));
   } catch (e) { info.textContent = '计算失败：' + e.message; }
 }
@@ -3927,14 +4041,25 @@ function buildSettingsBase() {
   body.appendChild(h('div', { class: 'group' },
     txt('secBaseUrl', '反代地址', 'text', '留空使用主 API'), txt('secApiKey', 'API Key', 'password', '可选'), modelField('模型', 'secModel', 'secBaseUrl', 'secApiKey', '建议用便宜的小模型')));
 
+  body.appendChild(h('div', { class: 'group-title', text: '记忆与总结（自动总结会在后台单独发请求，用「副 API」；没填副 API 就用主 API）' }));
+  body.appendChild(h('div', { class: 'group' },
+    txt('segMax', '每段摘要的字数上限', 'number', '300', '每次总结写出的「本段摘要」最多多少字。按次计费可以放宽到 400–600，细节更多'),
+    txt('profileMax', '固定信息的字数上限', 'number', '800', '称呼、生日、喜好、忌口、约定这类长期有效的事实，每次总结时更新，永远不被压缩'),
+    txt('memCompressAt', '过往摘要攒到多少字就自动合并', 'number', '6000', '所有分段摘要加起来超过这个字数，就把最早的几条合并成 1 条（多发 1 次请求）。原来的几条只是归档，不删，可以在记忆页撤销合并'),
+    txt('memStageMax', '合并后的摘要字数上限', 'number', '1500'),
+    sw('memAutoCompress', '超过字数自动合并旧摘要', '关掉后摘要只增不减，需要时自己点记忆页的「精炼」'),
+    sw('memConfirm', '总结后先让我确认', '开启后，新生成的摘要先放进记忆页的「待确认」，你点确认才会带给角色；确认前不会影响聊天。默认关'),
+    txt('memTemp', '总结的温度', 'number', '0.2', '越低越只写事实、越不爱发挥。建议 0–0.3')));
+  body.appendChild(h('div', { class: 'group-title', text: '回复长度与总 token' }));
+  body.appendChild(h('div', { class: 'group' },
+    txt('maxOutTokens', '单次回复最大 token（max_tokens）', 'number', '留空或 0＝不限制', '回复总被截断（说到一半没了）就填一个大一点的数，如 2000–4000。留空则不发这个参数，由模型/中转自己的默认值决定。Gemini 这类会「思考」的模型，思考也算在里面，建议 4000 以上'),
+    sw('tokBudgetOn', '控制发给模型的总 token', '默认关。开启后，发送前估算 系统提示 + 记忆 + 聊天记录，超过下面的上限就先少带最早的过往摘要，再减最早的聊天记录（至少留 10 条），角色设定和最新的消息不动。你按次计费的话不需要开'),
+    txt('tokBudget', '总 token 上限（含回复空间）', 'number', '60000', '上限里会先扣掉「单次回复最大 token」，再给输入。「提示词占用」卡片会显示裁掉了什么')));
   body.appendChild(h('div', { class: 'group-title', text: '上下文' }));
   body.appendChild(h('div', { class: 'group' },
-    txt('ctxWindow', '短期窗口：每次带多少条最近的原话', 'number', '25', '角色设置里可以单独覆盖'),
-    txt('ctxStep', '总结步长：原话溢出窗口多少条就总结一次', 'number', '10', '角色开了「自动总结记忆」才生效：未总结的原话攒到 窗口+步长 条，就把最旧的一批并进前情提要'),
-    txt('rollMax', '前情提要的字数上限（越小越省 token）', 'number', '600', '前情提要只有一段，每次总结时更新，所以 token 不会越攒越多'),
-    txt('recallMax', '关键词回忆：最多想起几段旧记忆', 'number', '3', '每次总结还会单独存一段小摘要。聊天里出现了摘要里的词，就把最相关的几段放进背景资料（不额外请求）；填 0 关闭'),
+    txt('ctxWindow', '短期窗口：每次带多少行最近的原话', 'number', '25', '一条气泡算一行（AI 一次回复拆成几条就是几行）。角色设置里可以单独覆盖'),
+    txt('ctxStep', '总结步长：原话溢出窗口多少行就总结一次', 'number', '30', '角色开了「自动总结记忆」才生效：窗口之外的原话攒够这么多行，就在后台单独发 1 次请求总结，总结过的原话不再带进聊天记录。建议 30–50'),
     txt('depthPos', '背景资料插入位置（倒数第几条）', 'number', '5', '世界书、听歌、时间、手机动态这些背景资料，插在聊天记录倒数第几条之前。5＝前面隔着最新的 4 条；1＝紧贴最后一条；越大越靠前（越不容易盖过最新消息，但也越容易被忽略）。填 1–30'),
-    txt('memoryLimit', '旧记忆：还没有前情提要时，最近多少条旧总结每次都带', 'number', '20'),
     field('背景资料的消息角色（深度注入）', depthSel, '默认 system。如果你的中转/模型不认对话中间的 system 消息（报错或像没看到），改成 user'),
     txt('scanDepth', '世界书扫描最近几条消息', 'number', '5'),
     txt('worldBookMaxChars', '世界书最多带入多少字', 'number', '6000'),
@@ -4078,7 +4203,7 @@ async function renderMemBooks() {
   var list = await dbAll('characters'), body = $('membooks-body'); body.innerHTML = '';
   if (!list.length) { body.appendChild(h('div', { class: 'empty', text: '还没有角色，先去聊天里新建一个' })); return; }
   var counts = {};
-  for (var i = 0; i < list.length; i++) counts[list[i].id] = (await dbByIndex('memories', 'byChar', list[i].id)).length;
+  for (var i = 0; i < list.length; i++) { var cc = memCollect(await dbByIndex('memories', 'byChar', list[i].id)); counts[list[i].id] = cc.manual.length + cc.auto.length + cc.pending.length + (cc.profile ? 1 : 0); }
   body.appendChild(bookGrid(list.map(function (c) { return { id: c.id, name: c.name, sub: counts[c.id] + ' 条', c: c }; }), function (it) { cur = it.c; go('s-memory'); }));
 }
 onShow['s-membooks'] = renderMemBooks;
@@ -4456,7 +4581,7 @@ async function applyImport(data, partIds, replaceMode) {
       var s = p.stores[j]; if (!Array.isArray(data[s])) continue;
       if (replaceMode) await dbClear(s);
       if (s === 'characters') {
-        var lastBy = {}, rollPtr = {}; (data.memories || []).forEach(function (m) { if (m.roll && m.ptr) rollPtr[m.characterId] = Math.max(rollPtr[m.characterId] || 0, m.ptr); else if (m.kind !== 'note') lastBy[m.characterId] = Math.max(lastBy[m.characterId] || 0, m.ts || 0); });
+        var lastBy = {}, rollPtr = {}; (data.memories || []).forEach(function (m) { if (m.roll && m.ptr) rollPtr[m.characterId] = Math.max(rollPtr[m.characterId] || 0, m.ptr); else if (m.kind !== 'note' && m.kind !== 'profile' && !m.core) lastBy[m.characterId] = Math.max(lastBy[m.characterId] || 0, m.to || m.ts || 0); });
         var lastTh = {}; (data.thoughts || []).forEach(function (t) { lastTh[t.characterId] = Math.max(lastTh[t.characterId] || 0, t.ts || 0); });
         data[s].forEach(function (c) { if (c.lastSummaryTs == null) c.lastSummaryTs = rollPtr[c.id] || lastBy[c.id] || 0; if (c.lastThoughtTs == null) c.lastThoughtTs = lastTh[c.id] || 0; });
       }
