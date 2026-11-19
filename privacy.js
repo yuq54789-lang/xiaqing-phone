@@ -46,7 +46,7 @@
   var st = document.createElement('style');
   st.textContent = '#selbar{flex-wrap:wrap}#selbar span{min-width:64px}' +
     /* 长按菜单超过 4 项时，改成每行 4 个的整齐格子；4 项及以下的菜单不受影响 */
-    '.msgpop:has(button:nth-child(6)){display:grid;grid-template-columns:repeat(4,1fr)}' +
+    '.msgpop:has(button:nth-child(6)){display:grid;grid-template-columns:repeat(4,auto)}' +
     '.msgpop:has(button:nth-child(6)) button{text-align:center}';
   document.head.appendChild(st);
 
