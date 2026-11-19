@@ -110,7 +110,7 @@ var DEFAULTS = {
   stream: false, themeId: 'default', customCss: '', homeBg: '', fontUrl: '', fontData: '', fontName: '',
   secBaseUrl: '', secApiKey: '', secModel: '',
   scanDepth: 5, worldBookMaxChars: 6000, defaultContext: 30, ctxWindow: 25, ctxStep: 30,
-  segMax: 300, profileMax: 800, memCompressAt: 6000, memStageMax: 1500, memAutoCompress: true, memConfirm: false, memTemp: 0.2, tokBudgetOn: false, tokBudget: 60000, maxOutTokens: 0, stickerPromptLimit: 60, autoReply: false, period: null, myProfile: null, musicApi: '', musicApiBackup: '', apiPresets: [], activePresetId: null, weather: null, homeLayout: null,
+  segMax: 300, profileMax: 800, memCompressAt: 6000, memStageMax: 1500, memAutoCompress: true, memConfirm: false, memTemp: 0.2, tokBudgetOn: false, tokBudget: 60000, maxOutTokens: 0, stickerPromptLimit: 60, period: null, myProfile: null, musicApi: '', musicApiBackup: '', apiPresets: [], activePresetId: null, weather: null, homeLayout: null,
   bubbleSlow: 1,                 /* 气泡出现速度倍数：1=默认，越大越慢 */
   notifyUrl: '', notifyName: '', /* 消息提示音（网址 / 上传的文件名） */
   clockLayout: 'h', clockColor: '', dateColor: '', wxColor: '', clockDy: 0, dateDy: 0, wxDy: 0, clockDx: 0, dateDx: 0, wxDx: 0,   /* 时钟：横/竖排、三处文字颜色、三处上下及左右位置（互不绑定） */
@@ -2090,7 +2090,6 @@ $('composer').addEventListener('submit', async function (e) {
   var n = msgNode(m); if (lastShownTs && m.ts - lastShownTs > 600000) appendMsgNode(h('div', { class: 'sysline', text: fmtTime(m.ts).replace(/:\d\d$/, '') }));
   if (n) appendMsgNode(n); lastShownTs = m.ts; scrollBottom();
   setTimeout(scrollBottom, 120); setTimeout(scrollBottom, 380);   /* 键盘/布局变化后再滚一次 */
-  if (settings.autoReply) generateReply(); // 默认只发送，不回复：要你点「等回复」才会回
 });
 $('b-wait').onclick = function () { generateReply(); };
 /* 安卓 WebView：没挂在页面上的 <input type=file> 点了不一定能弹出选择器，选完事件也可能丢。统一在 click 时临时挂到页面上 */
@@ -2176,9 +2175,8 @@ function openImagePicker() {
         ok++; before += files[i].size; after += r.url.length * 0.75;
       } catch (e) { bad++; }
     }
-    if (ok) toast('已发送 ' + ok + ' 张图片（' + Math.round(before / 1024) + 'KB → ' + Math.round(after / 1024) + 'KB）' + (bad ? '，' + bad + ' 张失败' : '') + (settings.autoReply ? '' : '。点「等回复」让 TA 看图'));
+        if (ok) toast('已发送 ' + ok + ' 张图片（' + Math.round(before / 1024) + 'KB → ' + Math.round(after / 1024) + 'KB）' + (bad ? '，' + bad + ' 张失败' : '') + '。点「等回复」让 TA 看图');
     else toast('图片读取失败');
-    if (ok && settings.autoReply) generateReply();
   });
   f.click();
 }
@@ -2286,7 +2284,6 @@ async function pushVoiceMsg(m) {
   await dbPut('messages', m);
   if (lastShownTs && m.ts - lastShownTs > 600000) appendMsgNode(h('div', { class: 'sysline', text: fmtTime(m.ts).replace(/:\d\d$/, '') }));
   var n = msgNode(m); if (n) appendMsgNode(n); lastShownTs = m.ts; scrollBottom();
-  if (settings.autoReply) generateReply();
 }
 /* 「AI 会帮你转文字」的提示：一天只提一次，用聊天里的小灰字，不弹 toast */
 function voiceTip() {
@@ -2405,7 +2402,7 @@ function addLocalMsg(m) {
 }
 function userPat() {
   if (!cur) return;
-  addLocalMsg({ id: uid(cur.id), characterId: cur.id, role: 'user', type: 'pat', content: '你拍了拍 ' + cur.name, ts: Date.now() }).then(function () { if (settings.autoReply) generateReply(); });
+  addLocalMsg({ id: uid(cur.id), characterId: cur.id, role: 'user', type: 'pat', content: '你拍了拍 ' + cur.name, ts: Date.now() });
 }
 function transferSheet() {
   var amt = h('input', { type: 'number', inputmode: 'decimal', step: '0.01', min: '0', placeholder: '金额（元）', style: 'width:100%;box-sizing:border-box;padding:10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:inherit;margin-bottom:8px;font-size:18px' });
@@ -2414,7 +2411,7 @@ function transferSheet() {
     h('button', { class: 'btn primary', text: '转账', onclick: function () {
       var n = Math.round(parseFloat(amt.value) * 100) / 100; if (!(n > 0)) { toast('请输入大于 0 的金额'); return; }
       closeSheet();
-      addLocalMsg({ id: uid(cur.id), characterId: cur.id, role: 'user', type: 'transfer', content: '', meta: { amount: n, note: note.value.trim(), receiverName: cur.name, status: 'pending' }, ts: Date.now() }).then(function () { if (settings.autoReply) generateReply(); });
+    addLocalMsg({ id: uid(cur.id), characterId: cur.id, role: 'user', type: 'transfer', content: '', meta: { amount: n, note: note.value.trim(), receiverName: cur.name, status: 'pending' }, ts: Date.now() });
     } }),
     h('button', { class: 'btn', text: '取消', onclick: closeSheet }))]);
   setTimeout(function () { amt.focus(); }, 50);
@@ -2635,10 +2632,48 @@ async function speakVoice(btn, text, bub) {
 }
 /* 去掉模型的思考过程：<think>/<thinking>/<thought> 标签，以及「🫧thought / 🫧thinking」标记及其内容 */
 function stripLeakedPlan(t) {
-  /* 模型把「我要怎么回」的英文草稿漏进了回复开头（例如 "Let's write a natural response."）：只在后面确实跟着中文时才去掉 */
-  var m = /^\s*((?:let'?s|let me|i('ll| will| should| need to| must| am going to)|okay[,.]?\s|ok[,.]?\s|alright|so,|now,|first,|the user|user (?:is|has|wants|said|asked)|as (?:the|an) (?:character|ai)|(?:here'?s|here is) (?:my|a|the)|(?:draft|plan|response|reply)\b)[^\u3400-\u9fff\n]*?[.:!]\s*)(?=[\s\S]*[\u3400-\u9fff])/i.exec(t);
-  if (m && /(response|reply|message|answer|write|respond|natural|character|persona|draft|plan|user)/i.test(m[1])) t = t.slice(m[0].length);
-  return t.replace(/^\s+/, '');
+  var raw = String(t || '');
+  /* 1. 反代未包裹 <think> 标签、直接把英文 Markdown 思维链粘在正文前面时的兜底清洗 */
+  if (/^\s*(?:\d+\.\s*\*\*[A-Za-z]|\*\s*\*?(?:Character|Directives|Current Time|Memory|Analyze|User|Context|Draft|Refining|Step|Plan|Thought|Tone|Rules?)\b)/i.test(raw)) {
+    var lines = raw.split('\n'), i = 0;
+    while (i < lines.length) {
+      var ln = lines[i].trim();
+      if (!ln || /^\d+\.\s*\*\*/.test(ln) || /^[-*•]\s+/.test(ln)) {
+        var glue = ln.match(/^[-*•]\s+[A-Za-z0-9\s,.;:'"()\[\]`\-/!?]+[.)\]]\s*([\u4e00-\u9fff][\s\S]*)$/);
+        if (glue && i > 0) { lines[i] = glue[1]; break; }
+        i++;
+      } else break;
+    }
+    if (i > 0 && i < lines.length) raw = lines.slice(i).join('\n');
+  }
+
+  /* 2. 兜底清洗：开头出现中文分条思维链（如 "1. 要……2. 怎么……"）且后文已切入正文/标签时，剥离前面的分条草稿 */
+  var trimmedStart = raw.replace(/^\s+/, '');
+  if (/^1[、.．]\s*[^\n]{1,120}(?:\n|[，,。\s]+2[、.．]\s*)/.test(trimmedStart)) {
+    /* 优先从第一个末尾标签（<状态> / <心声> / <朋友圈> / </结束>）往前找，或者找明显开始说人话/动作的一行 */
+    var lines2 = trimmedStart.split('\n');
+    var cutIdx = -1;
+    for (var j = 1; j < lines2.length; j++) {
+      var s = lines2[j].trim();
+      if (!s) continue;
+      /* 如果这行已经不是 "1./2./3." 分条，且不像分析/指令说明，就认为是正文起点 */
+      var isStepLine = /^(?:\d+[、.．\)]|[-*•]|分析|指令|规则|人设|记忆|语气|注意|首先|其次|最后|总结|草稿)/.test(s);
+      if (!isStepLine && /[\u4e00-\u9fff]/.test(s)) {
+        /* 确保前面确实有过分条思维链 */
+        var prevPart = lines2.slice(0, j).join('\n');
+        if (/(?:^|\n)\s*1[、.．\)]/.test(prevPart) && /(?:^|\n)\s*2[、.．\)]/.test(prevPart)) {
+          cutIdx = j;
+          break;
+        }
+      }
+    }
+    if (cutIdx > 0) raw = lines2.slice(cutIdx).join('\n');
+  }
+
+  /* 3. 模型把「我要怎么回」的英文草稿漏进了回复开头：只在后面确实跟着中文时才去掉 */
+  var m = /^\s*((?:let'?s|let me|i('ll| will| should| need to| must| am going to)|okay[,.]?\s|ok[,.]?\s|alright|so,|now,|first,|the user|user (?:is|has|wants|said|asked)|as (?:the|an) (?:character|ai)|(?:here'?s|here is) (?:my|a|the)|(?:draft|plan|response|reply)\b)[^\u3400-\u9fff\n]*?[.:!]\s*)(?=[\s\S]*[\u4e00-\u9fff])/i.exec(raw);
+  if (m && /(response|reply|message|answer|write|respond|natural|character|persona|draft|plan|user)/i.test(m[1])) raw = raw.slice(m[0].length);
+  return raw.replace(/^\s+/, '');
 }
 function stripThinking(text) {
   var t = String(text || '');
@@ -2983,7 +3018,8 @@ async function applyDictation(ids, texts) {
 }
 async function generateReply(fresh) {
   var char = cur, box = $('msgs'), r = rounds[char.id];
-  if (fresh || !r || !r.active || r.won) r = rounds[char.id] = { active: true, won: false, total: 0, fails: 0 };
+if (!fresh && r && r.active && r.won) return;   /* 正在弹气泡时防手滑点重 */
+if (fresh || !r || !r.active) r = rounds[char.id] = { active: true, won: false, total: 0, fails: 0 };
   r.total++; refreshTitle();
   try {
     var prompt = await buildPrompt(char); prompt.chatId = char.id;
@@ -4257,7 +4293,6 @@ function buildSettingsBase() {
   body.appendChild(h('div', { class: 'group-title', text: '输出方式' }));
   body.appendChild(h('div', { class: 'group' },
     sw('stream', '流式输出', '长回复不容易被网关超时掐断。回复会收完再一起显示。'),
-    sw('autoReply', '发送后自动回复', '关闭时，发送消息后角色不会立刻回，要你点聊天页的「等回复」才会回复。'),
     sw('showTime', '显示消息时间', '每条气泡下面显示几点几分。'),
     sw('enterSend', '回车发送消息', '开启后按 Enter 直接发送，Shift+Enter 换行（电脑键盘）。关闭时 Enter 是换行，Ctrl+Enter 发送。手机输入法的回车键不受影响。'),
     sw('sysNotify', '后台系统通知', '切到别的 App 或锁屏时，角色发来的第一条消息会弹系统通知。打开时会向浏览器申请通知权限；有些内置浏览器不支持。'),

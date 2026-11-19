@@ -146,7 +146,7 @@ button { cursor:pointer; }
 .bubble.sticker { padding:0; background:transparent !important; border:0 !important; box-shadow:none !important; }
 .bubble.sticker img { max-width:110px; max-height:110px; min-width:64px; min-height:64px; width:auto; height:auto; border-radius:8px; object-fit:contain; display:block; }   /* min：还没加载出来时先占好位置，加载完不会突然撑高 */
 .bubble.sticker .alt { color:var(--sub); font-size:13px; padding:6px 8px; }
-.bubble.transfer { background:#e9a23b; color:#2b1b00; border:0; min-width:170px; }
+.bubble.transfer { background:#e9a23b !important; color:#2b1b00 !important; border:0 !important; min-width:170px; }
 .bubble.transfer b { font-size:18px; display:block; }
 .bubble.offline { max-width:92%; font-size:14.5px; line-height:1.85; letter-spacing:.2px; }
 #fab button.on { background:color-mix(in srgb, var(--accent) 55%, transparent); color:#fff; }
@@ -746,7 +746,7 @@ input, textarea, [contenteditable], #errpop .e-body, .selectable { -webkit-user-
 
 .bubble.transfer { display:flex; flex-direction:column; gap:2px; min-width:170px; }
 .bubble.transfer small { opacity:.65; font-size:11px; margin-top:4px; border-top:1px solid rgba(0,0,0,.12); padding-top:4px; }
-.bubble.transfer.done { background:#d9c9a8; opacity:.85; }
+.bubble.transfer.done { background:#d9c9a8 !important; color:#2b1b00 !important; opacity:.85; }
 .pd-card { text-align:center; padding:22px 16px !important; }
 .pd-big { font-size:24px; font-weight:700; color:var(--accent); }
 .pd-sub { margin-top:6px; color:var(--sub); font-size:13px; }
