@@ -92,8 +92,8 @@ function countMessagesAfter(cid, ts) {
 var TTS_TAGS = ['笑', '轻笑', '咯咯笑', '叹气', '惊呼', '吸气', '呼气', '喘息', '耳语', '唱歌', '哼歌', '结巴', '停顿', '哭声', '抽泣', '呜咽', '呻吟', '清嗓', '咳嗽', '吸鼻子', '咂嘴', '啧嘴', '打哈欠', '打喷嚏', '打嗝', '吞咽', '闷哼', '冷笑', '哼鼻子'];
 /* 语音条里显示的文字：去掉所有半角/全角方括号及里面的声音标签（传给 TTS 的仍保留标签） */
 function stripVoiceTags(t) { return String(t || '').replace(/[\[［][^\]］]+[\]］]/g, '').replace(/\s{2,}/g, ' ').trim(); }
-var OUTPUT_RULES = '像真人在手机上聊天一样回复：口语化、简短自然。\n把回复拆成多条短消息，每条消息单独一行（最多 20 条）。\n想引用用户最近说过的话，使用 chatResponse 中 type 为 quote 的消息对象，quote 字段写原话，content 写回复。\n【输出格式铁律】每次回复必须是一个完整、合法的 JSON 对象；禁止 Markdown 代码围栏、JSON 数组、JSON 前后说明文字。顶层只使用 chatResponse 和 actions 两个键。\nchatResponse 是消息数组；每项使用 type 和 content。type 可为 text、voice、sticker、quote；sticker 使用 sticker_name；quote 使用 quote；voice 的 content 是语音原话。线上模式不要把动作标记写进聊天正文。\nactions 是对象，可按需包含 status、thought、moments、social、music；没有动作时可给空对象。status 格式为 {"type":"online|busy|away|sleeping","text":"不超过16字"}；thought 格式为 {"heartfeltVoice":"不超过40字","randomJottings":"不超过120字"}，仅在原有心声功能要求生成时提供；moments 格式为 {"post":"字符串","likes":["动态ID"],"comments":[{"id":"动态ID","text":"评论","reply":"可选"}]}；social 是动作数组，支持 {"type":"pat"}、{"type":"transfer","amount":正数,"note":"可选备注"}、{"type":"accept"}、{"type":"refund"}；music 是动作数组，支持 {"type":"next"} 或 {"type":"play","name":"歌曲名"}。\n不要在开头写角色名字，不要写旁白、括号动作或解释，除非角色设定要求这样。每次开口根据当前话题和心情自然起头，不要重复近期开头词。始终保持角色设定，不要承认自己是 AI。只输出 JSON 对象，不输出思考过程或英文说明。';
-var OFFLINE_RULES = '现在是线下场景，你和用户面对面相处。用小说式的叙述回复：用第三人称写角色的动作、神态、环境，对白用「」括起来，连贯地写成一段或几段文字。篇幅 {{MIN}} 到 {{MAX}} 字，一次写完，不要拆成多条消息，不要发表情包，不要用你的名字做开头。只写角色自己的言行和感受，不要替用户说话、替用户做动作。始终保持角色设定，不要承认自己是 AI。\n【输出格式铁律】仍必须只输出一个完整 JSON 对象，顶层只包含 chatResponse 和 actions；chatResponse 为仅含一个 {type:"text",content:"线下叙述正文"} 的数组；actions 按需包含 status、thought、moments，不要使用 innerVoice。';
+var OUTPUT_RULES = '像真人在手机上聊天一样回复：口语化、简短自然。\n把回复拆成多条短消息，每条消息单独一行（最多 20 条）。\n想引用用户最近说过的话，写 [引用：原话片段]你的回复。\n【输出格式】直接输出纯文本聊天内容：不要 JSON，不要 Markdown 代码围栏。特殊内容一律用标签，标签不属于聊天正文：\n- 表情包：单独一行 [表情包：名称]\n- 语音（仅在后文允许发语音时）：单独一行 [语音：说的话]\n- 状态（可选，放在回复最末尾另起一行）：<状态>类型｜短描述</状态>，类型只能是 在线、忙碌、离开、睡觉 之一，短描述不超过 16 字，例如 <状态>在线｜在想你</状态>\n- 心声、朋友圈、拍一拍、转账、一起听歌的标签，按后文对应章节的说明写（没有对应章节就不要写）。\n不要在开头写角色名字，不要写旁白、括号动作或解释，除非角色设定要求这样。每次开口根据当前话题和心情自然起头，不要重复近期开头词。始终保持角色设定，不要承认自己是 AI。不输出思考过程或英文说明。';
+var OFFLINE_RULES = '现在是线下场景，你和用户面对面相处。用小说式的叙述回复：用第三人称写角色的动作、神态、环境，对白用「」括起来，连贯地写成一段或几段文字。篇幅 {{MIN}} 到 {{MAX}} 字，一次写完，不要拆成多条消息，不要发表情包，不要用你的名字做开头。只写角色自己的言行和感受，不要替用户说话、替用户做动作。始终保持角色设定，不要承认自己是 AI。\n【输出格式】直接输出叙述正文纯文本，不要 JSON，不要代码围栏。需要时可在正文末尾另起一行加 <状态>…</状态>、<心声>…</心声>、<朋友圈>…</朋友圈> 标签（写法见后文对应章节），标签不属于正文。';
 /* 线下模式的完整规则 = 内置规则（字数按角色设置填） + 你选的预设（文风/格式要求） */
 function offlineRules(c, preset) {
   var w = (c && c.offlineWords) || {}, mn = Number(w.min) > 0 ? Math.round(w.min) : 200, mx = Number(w.max) > 0 ? Math.round(w.max) : 600;
@@ -103,8 +103,8 @@ function offlineRules(c, preset) {
   return out;
 }
 /* 心声并入回复：不另外请求，让模型在同一次回复末尾顺带写 */
-var THOUGHT_RULES = '当原有心声功能要求生成时，把心声放在 actions.thought 对象中，字段为 heartfeltVoice（不超过40字）和 randomJottings（不超过120字）。这不是聊天正文；不要新增 innerVoice 字段，也不要把心声念给用户听。';
-var MOMENT_RULES = '你和用户互为朋友圈好友。上文提供了最近动态及动态 ID。需要发动态、点赞或评论时，在 actions.moments 中按结构化字段填写：post 为新动态（不超过100字，不想发留空）；likes 为动态 ID 数组；comments 为 [{id,text,reply?}]。不要重复评论已互动内容，不要频繁发动态；没有互动时省略 moments。朋友圈动作不是聊天正文。';
+var THOUGHT_RULES = '当原有心声功能要求生成时，在回复最末尾另起几行写：\n<心声>\n心声：一句话，不超过 40 字\n散记：零碎的想法，不超过 120 字\n</心声>\n这不是聊天正文，不要把心声念给用户听。';
+var MOMENT_RULES = '你和用户互为朋友圈好友。上文提供了最近动态及动态 ID。需要发动态、点赞或评论时，在回复最末尾写一个 <朋友圈> 标签，里面每行一项，没有的项整行省略：\n发布：新动态正文，不超过 100 字\n点赞：动态ID，多个用逗号隔开\n评论：动态ID｜评论内容｜被回复的人（可省略；最多 4 条，每条一行）\n例如：\n<朋友圈>\n点赞：m1\n评论：m1｜哈哈这张好看\n</朋友圈>\n不要重复评论已互动内容，不要频繁发动态；没有互动时不要写这个标签。朋友圈标签不是聊天正文。';
 var DEFAULTS = {
   baseUrl: '', apiKey: '', model: '', temperature: 0.8,
   stream: false, themeId: 'default', customCss: '', homeBg: '', fontUrl: '', fontData: '', fontName: '',
@@ -314,7 +314,7 @@ function buildDepth(ctx) {
   if (ctx.periodText) L.push(ctx.periodText);
   if (!off && ctx.stickers && ctx.stickers.length) L.push('可发送的表情包（想发就单独一行写 [表情包：名称]，名称只能从这里选，不要自己编）：' + ctx.stickers.map(function (st) { return st.name; }).join('、'));
   var tail = off ? '先回应用户最新的一条消息，再按写作要求展开。'
-    : '格式提醒：每条消息单独一行，最多 20 条；先回应用户最新的一条消息，再说别的；引用某句话写 [引用：原话片段]你的回复；' + (c.aiVoice ? '语音单独一行写 [语音：说的话]（每次最多 1 条）；' : '') + '表情包写 [表情包：名称]；最终必须按主提示词给出的 JSON 对象格式输出，不要输出任何英文思考或说明。';
+    : '格式提醒：每条消息单独一行，最多 20 条；先回应用户最新的一条消息，再说别的；引用某句话写 [引用：原话片段]你的回复；' + (c.aiVoice ? '语音单独一行写 [语音：说的话]（每次最多 1 条）；' : '') + '表情包写 [表情包：名称]；直接输出纯文本，特殊内容用标签，不要用 JSON，不要输出任何英文思考或说明。';
   if (!L.length) return tail;
   return '【背景资料——只有你知道，不是聊天内容。除非和用户正在聊的话题有关，否则不要提起，更不要复述这些提示。】\n' + L.join('\n\n') + '\n\n' + tail;
 }
@@ -460,6 +460,40 @@ function parseStructuredResponse(text) {
   return { text: body + (tags.length ? '\n' + tags.join('\n') : ''), data: j };
 }
 
+/* ---- 模型原文清洗：在所有解析之前跑一遍，处理乱码字符 / 缺右括号的标签 / 行末半截标签 / 被截断的 JSON ---- */
+var RE_KNOWN_OPEN = /^[\[【［]\s*(?:表情包|表情|sticker|语音消息|语音|voice_message|voice|引用回复|引用|quote_reply|quote|转账|CMD)\s*[:：]/i;
+var KNOWN_TAG_NAMES = ['表情包', '表情', 'sticker', '语音消息', '语音', 'voice_message', 'voice', '引用回复', '引用', 'quote_reply', 'quote', '转账', '拍一拍', '收款', '退还', 'CMD'];
+var KNOWN_XML_NAMES = ['状态', '心声', '朋友圈', '听写'];
+/* 被截断的 JSON：只抢救已经写完整的消息对象（actions 之后的丢掉）；一条都抢救不出就返回空，绝不把 JSON 原文当聊天显示 */
+function salvageJsonReply(t) {
+  var cut = t.indexOf('"actions"'); if (cut !== -1) t = t.slice(0, cut);
+  var lines = [], re = /\{[^{}]*\}/g, m;
+  while ((m = re.exec(t))) { var l = null; try { l = jsonReplyToLines(JSON.stringify([JSON.parse(m[0])])); } catch (e) {} if (l) lines.push(l); }
+  return lines.join('\n');
+}
+function fixTagLine(ln) {
+  var stack = [], i, c;
+  for (i = 0; i < ln.length; i++) {
+    c = ln.charAt(i);
+    if (c === '[' || c === '【' || c === '［') stack.push(i);
+    else if ((c === ']' || c === '】' || c === '］') && stack.length) stack.pop();
+  }
+  stack.forEach(function (p) { if (RE_KNOWN_OPEN.test(ln.slice(p))) ln += ']'; });   /* 缺右括号：补上，再走原来的解析 */
+  var xm = ln.match(/<\/?([^<>\n]{0,4})$/);   /* 行末孤立的 <状 / </心 */
+  if (xm && KNOWN_XML_NAMES.some(function (n) { return n.indexOf(xm[1]) === 0; })) ln = ln.slice(0, xm.index);
+  var bm = ln.match(/[\[【［]([^\]】［［\[【:：\n]{0,8})$/);   /* 行末孤立的 [表情 / 【语 */
+  if (bm && KNOWN_TAG_NAMES.some(function (n) { return n.toLowerCase().indexOf(bm[1].toLowerCase()) === 0; })) ln = ln.slice(0, bm.index);
+  return ln;
+}
+function cleanModelText(text) {
+  var t = String(text || '').replace(/\r/g, '').replace(/[�​-‍⁠﻿\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '');
+  var tj = t.trim().replace(/^\x60{3}(?:json)?\s*/i, '').replace(/\s*\x60{3}$/, '');
+  if (/^\s*(?:\[\s*)?\{\s*"(?:chatResponse|type|content|messages|actions|text)"/.test(tj)) {
+    var ok = true; try { JSON.parse(tj); } catch (e) { ok = false; }
+    if (!ok) return salvageJsonReply(tj);
+  }
+  return t.split('\n').map(fixTagLine).join('\n').replace(/\n{3,}/g, '\n\n');
+}
 /* 一条历史消息 -> 给模型看的文字 */
 /* 消息被用户编辑过：让角色知道原话是什么 */
 function msgToText(m) {
@@ -687,23 +721,79 @@ function secondaryApi() {
     model: settings.secModel || settings.model
   };
 }
+/* ---- 总结防拒答：发送前脱敏 / 识别拒答 / 撞红线自动重试 ---- */
+var SUM_WORDS_BASE = ['做爱', '性爱', '性交', '上床', '啪啪', '口交', '肛交', '手淫', '自慰', '射精', '高潮', '勃起', '阴茎', '阴道', '阴蒂', '乳头', '奶子', '乳房', '下体', '私处', '小穴', '抽插', '内射', '精液', '淫荡', '淫水', '裸体', '脱光', '全裸', '情趣', '春药', '潮喷'];
+var SUM_WORDS_STRONG = ['亲吻', '接吻', '舌吻', '爱抚', '抚摸', '脱衣', '脱掉', '赤裸', '床上', '喘息', '呻吟', '娇喘', '欲望', '情欲', '湿了', '硬了', '挑逗', '撩拨', '肌肤'];
+function sumEsc(w) { return String(w).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+function sumExtraWords() {
+  var x = (typeof settings !== 'undefined' && settings && settings.sumWords) ? String(settings.sumWords) : '';
+  return x.split(/[,，、;；\n]+/).map(function (w) { return w.trim(); }).filter(Boolean);
+}
+/* level 1：敏感词换成「亲密互动」；2：含敏感内容的整句换成「（发生了亲密互动）」；3：再去掉括号动作，每句最多留 40 字 */
+function sumSanitize(text, level) {
+  level = level || 1;
+  var base = SUM_WORDS_BASE.concat(sumExtraWords()), reB = new RegExp(base.map(sumEsc).join('|'), 'g');
+  var reS = new RegExp(SUM_WORDS_STRONG.concat(base).map(sumEsc).join('|'));
+  var out = [], prev = null;
+  String(text || '').split('\n').forEach(function (ln) {
+    var lab = (ln.match(/^([^：\n]{1,20})：/) || [''])[0], hit = reS.test(ln);
+    ln = ln.replace(reB, '亲密互动');
+    if (level >= 2 && hit) ln = lab + '（发生了亲密互动）';
+    if (level >= 3 && !hit) ln = ln.replace(/[（(][^）)]*[）)]/g, '').replace(/\*[^*]*\*/g, '');
+    if (level >= 3 && ln.length > 40 + lab.length) ln = ln.slice(0, 40 + lab.length) + '…';
+    ln = ln.replace(/亲密互动(?:[、，,\s]*亲密互动)+/g, '亲密互动');
+    if (ln === prev) return;
+    prev = ln; out.push(ln);
+  });
+  return out.join('\n');
+}
+var SUM_REFUSE_RE = /违反.{0,12}(规则|政策|准则|条款|规定)|无法(为你|为您|帮你|帮助|协助|总结|处理|继续|完成|满足|生成|提供)|不能(为你|为您|帮你|帮助|协助|总结|处理|继续|完成|满足|生成|提供)|(抱歉|对不起)[，,。！!\s]*我(无法|不能|没办法)|作为(一个)?(AI|人工智能|语言模型)|内容(政策|审核|安全)|安全(规则|政策|准则|策略|审查)|不适合(总结|处理)|I (?:can(?:no|')t|am unable|won't)|I'm (?:sorry|unable)|I am sorry|as an AI|content policy|against (?:my|the) (?:guidelines|polic)/i;
+/* 摘要是第三人称叙述：拒答话术通常出现在开头，或者整段很短 */
+function memIsRefusal(out, seg) {
+  var t = String(seg == null ? out : seg).trim();
+  if (t.length < 6) return true;
+  return SUM_REFUSE_RE.test(t.slice(0, 120)) || (t.length < 80 && SUM_REFUSE_RE.test(t));
+}
+function sumGuardText(level) {
+  var t = '\n【脱敏要求】只客观概括事件和情绪，不复述细节。遇到亲密、身体、私密相关的内容，只用「发生了亲密互动」这类概括带过，写明双方当时的情绪和关系变化即可；不写任何过程、动作、部位和对话原文。聊天记录里已经被替换成「亲密互动」的词，照原样概括，不要还原。无论内容如何，都按上面的格式输出摘要，不要拒绝、不要道歉、不要解释。';
+  if (level >= 2) t += '\n这段记录已经被大幅压缩，只能依据现有文字概括；写不出细节就写「期间有较多互动」，不要推测。';
+  return t;
+}
+function sumIsBlock(e) { return !!(e && (e.refusal || /空内容|安全|SAFETY|PROHIBITED|blocked|content[_ ]?filter|policy|拦截/i.test(String(e.message || '') + ' ' + String(e.raw || '')))); }
 /* 总结：独立的一次请求（不在聊天里顺便写）。输出【本段摘要】和更新后的【固定信息】 */
-async function memSummarize(char, msgs, prior) {
+async function memSummarize(char, msgs, prior, level) {
+  level = level || 1;
   var api = secondaryApi(), me = char.userNickname || '用户', her = char.realName || char.name;
   var segMax = memNum(settings.segMax, 300, 100, 1500), prMax = memNum(settings.profileMax, 800, 200, 4000);
   var system = '你是聊天记忆整理助手，只做客观记录：不扮演任何角色，不评论，不抒情，不编造。\n' +
     '聊天双方是角色「' + her + '」和用户「' + me + '」。下面先给出【已有固定信息】（可能为空），再给出【新聊天记录】（每一天前面有一行「—— 日期 ——」）。\n' +
     '请输出两部分，严格用下面两个标记开头，不要标题，不要其它文字：\n' +
     '【本段摘要】用第三人称，以「' + her + '」「' + me + '」作主语，按时间顺序客观写出这段聊天里发生的事，一件事一句。必须保留：日期、人名地点物品等具体的词、做出的约定和承诺、计划、重要的决定、双方情绪的明显变化。不要写寒暄，不要写感想和评价。不超过 ' + segMax + ' 字。\n' +
-    '【固定信息】把新聊天里出现的、长期有效的信息并进已有固定信息，输出更新后的完整清单，每行一条，内容限于：称呼与昵称、生日与纪念日、喜好与厌恶、忌口与过敏、职业与作息、重要的人和关系、长期约定、双方关系的关键节点。新旧信息矛盾时以新的为准（删旧留新）；没有变化就原样照抄；确实什么都没有就只写「无」。不超过 ' + prMax + ' 字。';
+    '【固定信息】把新聊天里出现的、长期有效的信息并进已有固定信息，输出更新后的完整清单，每行一条，内容限于：称呼与昵称、生日与纪念日、喜好与厌恶、忌口与过敏、职业与作息、重要的人和关系、长期约定、双方关系的关键节点。新旧信息矛盾时以新的为准（删旧留新）；没有变化就原样照抄；确实什么都没有就只写「无」。不超过 ' + prMax + ' 字。' + sumGuardText(level);
   var out = (await callLLM({ base: api.base, key: api.key, model: api.model, temperature: memNum(settings.memTemp, 0.2, 0, 1), system: system,
-    messages: [{ role: 'user', content: '【已有固定信息】\n' + (prior || '（空）') + '\n\n【新聊天记录】\n' + memTranscript(msgs, char) }], stream: false })).trim();
-  if (!out) throw new Error('总结返回了空内容');
+    messages: [{ role: 'user', content: '【已有固定信息】\n' + (sumSanitize(prior || '', 1) || '（空）') + '\n\n【新聊天记录】\n' + sumSanitize(memTranscript(msgs, char), level) }], stream: false })).trim();
+  if (!out) { var e0 = new Error('总结返回了空内容'); e0.refusal = true; throw e0; }
   var r = parseMemOut(out);
-  if (!r.seg) throw new Error('总结没有写出「本段摘要」（模型返回：' + out.slice(0, 80).replace(/\n/g, ' ') + '）');
+  if (memIsRefusal(out, r.seg)) { var e1 = new Error('总结被拒答或没写出有效摘要（模型返回：' + out.slice(0, 80).replace(/\n/g, ' ') + '）'); e1.refusal = true; throw e1; }   /* 拒答话术不入库 */
+  if (r.profile && SUM_REFUSE_RE.test(r.profile.slice(0, 120))) r.profile = null;
   if (r.seg.length > 1500) r.seg = r.seg.slice(0, 1500);
   if (r.profile && r.profile.length > 6000) r.profile = r.profile.slice(0, 6000);
   return r;
+}
+/* 撞红线：脱敏加一档重发，最多重试 N 次（默认 2，每次隔 2 秒）。只重试「被拒答 / 被安全拦截」，网络错误不重试；全失败就抛错，调用方不入库、不动指针 */
+async function memSummarizeSafe(char, msgs, prior) {
+  var maxRetry = memNum(settings.sumRetry, 2, 0, 3), tries = 1 + maxRetry;
+  for (var lv = 1; lv <= tries; lv++) {
+    try { return await memSummarize(char, msgs, prior, Math.min(lv, 3)); }
+    catch (e) {
+      if (e && e.name === 'AbortError') throw e;
+      if (!sumIsBlock(e) || lv >= tries) {
+        if (sumIsBlock(e) && lv > 1) { var ne = new Error('总结被拒绝，已自动加强脱敏重试 ' + (lv - 1) + ' 次仍失败。这段没有入库，总结指针没动。'); ne.title = '总结被拒绝'; ne.raw = ne.message + '\n\n' + (e.raw != null && e.raw !== '' ? e.raw : e.message); throw ne; }
+        throw e;
+      }
+      await sleep(2000);
+    }
+  }
 }
 /* 二次压缩：把按时间排好的几条摘要合并成一条更短的（摘要的摘要） */
 async function memMerge(char, picks, target) {
@@ -726,6 +816,11 @@ async function memMerge(char, picks, target) {
 function parseThought(text) {
   var t = String(text || '').replace(/```json|```/g, '').trim();
   var m = t.match(/\{[\s\S]*\}/);
+  if (!m) {   /* 纯文本：心声：… / 散记：… */
+    var tv = t.match(/心声\s*[:：]\s*([\s\S]*?)(?=\n\s*散记\s*[:：]|$)/), tj = t.match(/散记\s*[:：]\s*([\s\S]*)$/);
+    var pv = (tv ? tv[1] : (tj ? '' : t.split('\n')[0])).trim().slice(0, 80), pj = (tj ? tj[1] : '').trim().slice(0, 240);
+    if (pv || pj) return { heartfeltVoice: pv, randomJottings: pj };
+  }
   if (!m) throw new Error('模型没有返回 JSON 格式：' + t.slice(0, 120));
   var o; try { o = JSON.parse(m[0]); } catch (e) { throw new Error('心声解析失败：' + m[0].slice(0, 120)); }
   var v = String(o.heartfeltVoice || '').trim(), j = String(o.randomJottings || '').trim();
@@ -742,21 +837,29 @@ function extractDictation(text) {
   if (i !== -1) { var rest = reply.slice(i + 4), nl = rest.indexOf('\n'); texts.push((nl === -1 ? rest : rest.slice(0, nl)).trim()); reply = reply.slice(0, i) + (nl === -1 ? '' : rest.slice(nl + 1)); }
   return { texts: texts, reply: reply.replace(/^\s+/, '') };
 }
+/* <状态>在线｜在想你</状态>（纯文本）；旧的 {"type":"online","text":"…"} 也认 */
+var STATUS_TYPES = ['online', 'busy', 'away', 'sleeping'];
+var STATUS_ZH = { '在线': 'online', '上线': 'online', '空闲': 'online', '忙碌': 'busy', '忙': 'busy', '勿扰': 'busy', '离开': 'away', '离线': 'away', '不在': 'away', '挂机': 'away', '睡觉': 'sleeping', '睡眠': 'sleeping', '睡了': 'sleeping', '休息': 'sleeping' };
+function parseStatusBody(body) {
+  var b = String(body || '').trim(); if (!b) return null;
+  if (b.charAt(0) === '{') {
+    try { var o = JSON.parse(b); if (STATUS_TYPES.indexOf(o.type) !== -1 && typeof o.text === 'string') return { type: o.type, text: o.text.trim().slice(0, 16) }; } catch (e) {}
+    return null;
+  }
+  var mm = b.replace(/\n[\s\S]*$/, '').match(/^\s*([A-Za-z\u4e00-\u9fa5]{1,10})\s*(?:[|｜:：,，、\-—]+\s*([\s\S]*))?$/); if (!mm) return null;
+  var k = mm[1].toLowerCase(), ty = STATUS_TYPES.indexOf(k) !== -1 ? k : STATUS_ZH[mm[1]];
+  if (!ty) return null;
+  return { type: ty, text: String(mm[2] || '').trim().slice(0, 16) };
+}
 function extractStatus(text) {
   var t = String(text || ''), status = null;
   var m = t.match(/<状态>([\s\S]*?)<\/状态>/);
   if (m) {
     t = t.replace(m[0], '');
-    try {
-      var o = JSON.parse(m[1].trim());
-      var types = ['online', 'busy', 'away', 'sleeping'];
-      if (types.indexOf(o.type) !== -1 && typeof o.text === 'string') {
-        status = { type: o.type, text: o.text.trim().slice(0, 16) };
-      }
-    } catch (e) {}
+    status = parseStatusBody(m[1]);
   } else {
     var i = t.indexOf('<状态>');
-    if (i !== -1) t = t.slice(0, i);
+    if (i !== -1) { status = parseStatusBody(t.slice(i + 4).split('\n')[0]); t = t.slice(0, i); }
   }
   return { reply: t.trim(), status: status };
 }
@@ -768,15 +871,33 @@ function extractThought(text) {
 }
 
 /* 从模型回复里拆出 <朋友圈>{…}</朋友圈>：返回 { reply, data }，解析失败 data=null */
+/* <朋友圈> 里每行一项：发布：… / 点赞：id,id / 评论：id｜内容｜被回复的人；旧的 JSON 也认 */
+function parseMomentsBody(body) {
+  var b = String(body || '').trim(); if (!b) return null;
+  var j = b.match(/\{[\s\S]*\}/);
+  if (j) { try { return JSON.parse(j[0]); } catch (e) {} }
+  var d = { post: '', likes: [], comments: [] }, cur = null, any = false;
+  b.split('\n').forEach(function (ln) {
+    var lm = ln.match(/^\s*(发布|发动态|动态|点赞|赞|评论)\s*[:：]\s*([\s\S]*)$/);
+    if (lm) {
+      any = true; var k = lm[1], v = lm[2].trim();
+      if (/^(发布|发动态|动态)$/.test(k)) { cur = 'post'; d.post = v; }
+      else if (/^(点赞|赞)$/.test(k)) { cur = 'likes'; v.split(/[,，、;；\s]+/).forEach(function (x) { x = x.replace(/^[#＃\[【(（]+|[\]】)）]+$/g, ''); if (x) d.likes.push(x); }); }
+      else { cur = 'comments'; var p = v.split(/\s*[|｜]\s*/); var id = (p[0] || '').replace(/^[#＃\[【(（]+|[\]】)）]+$/g, '').trim(); if (id && p[1]) d.comments.push({ id: id, text: p[1].trim(), reply: (p[2] || '').trim() || undefined }); }
+    } else if (cur === 'post' && ln.trim()) d.post += '\n' + ln.trim();
+  });
+  d.post = d.post.trim().slice(0, 100);
+  return any ? d : null;
+}
 function extractMoments(text) {
   var t = String(text || ''), m = t.match(/<朋友圈>([\s\S]*?)<\/朋友圈>/), data = null;
-  if (!m) { var i = t.indexOf('<朋友圈>'); return { reply: (i === -1 ? t : t.slice(0, i)).trim(), data: null }; }
-  try { var j = m[1].match(/\{[\s\S]*\}/); data = j ? JSON.parse(j[0]) : null; } catch (e) { data = null; }
+  if (!m) { var i = t.indexOf('<朋友圈>'); if (i === -1) return { reply: t.trim(), data: null }; try { data = parseMomentsBody(t.slice(i + 5)); } catch (e) { data = null; } return { reply: t.slice(0, i).trim(), data: data }; }   /* 没写结束标签：照样认 */
+  try { data = parseMomentsBody(m[1]); } catch (e) { data = null; }
   return { reply: t.replace(m[0], '').trim(), data: data };
 }
 
 /* 导出给测试用 */
-if (typeof module !== 'undefined') module.exports = { extractMusicCmd: extractMusicCmd, extractMoments: extractMoments, extractThought: extractThought, offlineRules: offlineRules, triggeredEntries: triggeredEntries, buildSystem: buildSystem, buildDepth: buildDepth, memForPrompt: memForPrompt, memCollect: memCollect, parseMemOut: parseMemOut, memLabel: memLabel, memLine: memLine, memProfilePrior: memProfilePrior, memTranscript: memTranscript, ctxParams: ctxParams, muRulesText: muRulesText, muStateText: muStateText, msgToText: msgToText, toApiMessages: toApiMessages, splitReply: splitReply, parseThought: parseThought, openaiUrl: openaiUrl, stickerPool: stickerPool, sampleStickers: sampleStickers, parseReplyLines: parseReplyLines, findSticker: findSticker };
+if (typeof module !== 'undefined') module.exports = { extractMusicCmd: extractMusicCmd, extractMoments: extractMoments, cleanModelText: cleanModelText, parseStatusBody: parseStatusBody, extractStatus: extractStatus, extractThought: extractThought, offlineRules: offlineRules, triggeredEntries: triggeredEntries, buildSystem: buildSystem, buildDepth: buildDepth, memForPrompt: memForPrompt, memCollect: memCollect, parseMemOut: parseMemOut, memIsRefusal: memIsRefusal, sumSanitize: sumSanitize, memLabel: memLabel, memLine: memLine, memProfilePrior: memProfilePrior, memTranscript: memTranscript, ctxParams: ctxParams, muRulesText: muRulesText, muStateText: muStateText, msgToText: msgToText, toApiMessages: toApiMessages, splitReply: splitReply, parseThought: parseThought, openaiUrl: openaiUrl, stickerPool: stickerPool, sampleStickers: sampleStickers, parseReplyLines: parseReplyLines, findSticker: findSticker };
 
 /* ---------- ⑤ 界面 ---------- */
 var $ = function (id) { return document.getElementById(id); };
@@ -2233,7 +2354,7 @@ async function openVoiceRecorder() {
 }
 /* 底栏「＋」：向上展开一列悬浮圆（语音 / 音频文件 / 图片 / 一起听 / 看手机），做法和右上角 ⋯ 一样 */
 /* ---------- 拍一拍 / 转账（双向）+ 经期 ---------- */
-var ACT_RULES = '需要拍一拍、转账、收款或退还转账时，使用 actions.social 数组：{type:pat}、{type:transfer,amount,note?}、{type:accept}、{type:refund}。金额必须为正数；只在符合角色和情境时使用。动作不属于聊天正文。';
+var ACT_RULES = '需要拍一拍、转账、收款或退还转账时，单独一行写标签：[拍一拍]、[转账:金额:备注]（备注可省略，例如 [转账:52.00:请你喝奶茶]）、[收款]、[退还]。金额必须为正数；只在符合角色和情境时使用。标签不属于聊天正文。';
 /* 从回复里拆出动作标记，返回 { reply, acts:[{k:'pat'|'transfer'|'accept'|'refund', amount, note}] } */
 function extractActions(text) {
   var t = String(text || ''), acts = [];
@@ -2835,6 +2956,7 @@ async function generateReply(fresh) {
       system: prompt.system, messages: prompt.messages, stream: settings.stream
     });
     if (!r.active || r.won) return;
+    text = cleanModelText(text);   /* 乱码 / 缺右括号 / 半截标签 / 被截断的 JSON */
     var dict = extractDictation(text);   /* 用户语音的文字也随回复一起回来，不另外请求 */
     var structured = parseStructuredResponse(dict.reply);
     var normalizedReply = structured ? structured.text : dict.reply;
@@ -3275,7 +3397,7 @@ async function memAutoCompress(char) {
   } finally { compBusy[char.id] = false; }
 }
 function memTypeName(m) {
-  if (m.stage) return '合并摘要'; if (m.seg) return '分段摘要';
+  if (m.stage) return '合并摘要'; if (m.seg) return m.manual ? '分段摘要·手动' : '分段摘要';
   if (m.kind === 'note') return '手写'; if (m.core) return '常驻';
   return m.kind === 'refined' ? '旧·精炼' : '旧总结';
 }
@@ -3338,15 +3460,60 @@ function editMemory(m) {
   btns.push({ text: '保存', cls: m.pending ? '' : 'primary', fn: async function (v) { m.content = v; await dbPut('memories', m); renderMemory(); } });
   if (m.stage && m.merged && m.merged.length) btns.push({ text: '撤销合并', fn: async function () { var n = await memUndoMerge(m); renderMemory(); toast('已恢复合并前的 ' + n + ' 条'); } });
   if (m.archived) btns.push({ text: '恢复这一条', fn: async function () { delete m.archived; delete m.mergedInto; await dbPut('memories', m); renderMemory(); toast('已恢复，会重新带给 TA'); } });
-  btns.push({ text: '删除', cls: 'danger', fn: async function () { await dbDel('memories', m.id); renderMemory(); } });
+  if ((m.kind === 'note' || m.core) && !m.pending && !m.archived) btns.push({ text: '转为分段摘要', fn: async function (v) { m.content = v; m.kind = 'summary'; m.seg = true; m.manual = true; delete m.core; m.from = 0; m.to = m.ts || Date.now(); await dbPut('memories', m); renderMemory(); toast('已转成分段摘要：不再常驻，会进过往摘要，攒多了可被合并'); } });
+  if (m.seg && !m.stage && !m.archived && !m.pending && m.manual) btns.push({ text: '转为常驻手写', fn: async function (v) { m.content = v; m.kind = 'note'; delete m.seg; delete m.manual; await dbPut('memories', m); renderMemory(); toast('已转成常驻手写，每次都带，不会被合并'); } });
+  /* 最新一条自动摘要：删掉后把总结指针退回这段的起点，才能重新总结（否则这段会被当成已总结） */
+  var canRewind = m.seg && !m.stage && !m.archived && !m.manual && Number(m.from) > 0 && cur && cur.id === m.characterId && (cur.lastSummaryTs || 0) === Number(m.to);
+  if (canRewind) btns.push({ text: '删除并重新总结这段', cls: 'danger', fn: async function () {
+    await dbDel('memories', m.id); cur.lastSummaryTs = Number(m.from) - 1; await dbPut('characters', cur); renderMemory();
+    toast('已删除，总结指针已退回；点「总结」会重新总结这段'); } });
+  btns.push({ text: canRewind ? '仅删除（指针不动）' : '删除', cls: 'danger', fn: async function () { await dbDel('memories', m.id); renderMemory(); } });
   btns.push({ text: '取消' });
-  textSheet('编辑记忆', m.content, btns, m.stage ? '这是几条摘要合并出来的。「撤销合并」会删掉它，并把原来的几条恢复。' : (m.archived ? '这一条已经被合并进别的摘要，不会带给 TA；「恢复这一条」会让它重新生效（可能和合并后的内容有重复）。' : ''));
+  textSheet('编辑记忆', m.content, btns, m.stage ? '这是几条摘要合并出来的。「撤销合并」会删掉它，并把原来的几条恢复。' : (m.archived ? '这一条已经被合并进别的摘要，不会带给 TA；「恢复这一条」会让它重新生效（可能和合并后的内容有重复）。' : (canRewind ? '这是最新一条自动摘要。如果内容有问题：「删除并重新总结这段」会把总结指针退回这段的起点；「仅删除」则指针不动，这段原话不会再被总结。' : '')));
+}
+function dayVal(ts) { var d = new Date(ts), p = function (n) { return ('0' + n).slice(-2); }; return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()); }
+/* 手动写一条分段摘要：和自动总结出来的一样进「过往摘要」，按日期排序，攒多了会被合并。
+ * 填「覆盖条数」：就是总结指针之后最早的 N 条，指针按条数前移（和点「总结」一样）；不填就按日期，默认不动指针 */
+function addSegSheet() {
+  var ch = cur; if (!ch) return;
+  var st = 'width:100%;box-sizing:border-box;border:1px solid var(--line);border-radius:8px;padding:8px;background:var(--bg);color:inherit';
+  var nIn = h('input', { type: 'number', min: '1', placeholder: '覆盖条数（推荐）：例 30', style: st + ';margin-bottom:8px' });
+  var a = h('input', { type: 'date', value: dayVal(Date.now()), style: st }), b = h('input', { type: 'date', value: dayVal(Date.now()), style: st });
+  var ta = h('textarea', { placeholder: '例：11月3日，A 和 B 约定周末去看海；B 因工作的事情绪低落，A 安慰了她。' });
+  var mv = h('input', { type: 'checkbox' });
+  openSheet([h('h3', { text: '新增分段摘要' }),
+    h('div', { class: 'hint', style: 'color:var(--sub);font-size:12px;margin-bottom:8px', text: '和自动总结的一样放进「过往摘要」：每次都带给 TA，不常驻，攒多了会被合并。\n推荐填「覆盖条数」：就是总结指针之后最早的那几条，写完指针自动往前走，自动总结不会再重复这段。不填条数就用下面的日期，默认不动指针。' }),
+    nIn, h('div', { style: 'display:flex;gap:8px;margin-bottom:8px' }, a, b), ta,
+    h('label', { style: 'display:flex;gap:8px;align-items:center;margin-top:8px;font-size:13px' }, mv, h('span', { text: '按日期保存时，也把总结指针推到结束日期之后' })),
+    h('div', { class: 'btn-row', style: 'margin-top:10px' },
+      h('button', { class: 'btn primary', text: '保存', onclick: async function () {
+        var v = ta.value.trim(); if (!v) { toast('先写点内容'); return; }
+        var f, t, cnt = 0, move = mv.checked, n = Math.floor(Number(nIn.value));
+        if (n > 0) {
+          var cand = (await pageMessages(ch.id, null, 400)).filter(function (x) { return x.ts > (ch.lastSummaryTs || 0) && !x.hidden && x.type !== 'system' && x.type !== 'pat'; }).slice(0, n);
+          if (!cand.length) { toast('总结指针之后没有可覆盖的消息'); return; }
+          f = cand[0].ts; t = cand[cand.length - 1].ts; cnt = cand.length; move = true;
+        } else {
+          f = new Date((a.value || dayVal(Date.now())) + 'T00:00:00').getTime(); t = new Date((b.value || a.value || dayVal(Date.now())) + 'T23:59:59').getTime();
+          if (!isFinite(f) || !isFinite(t)) { toast('日期不对'); return; }
+          if (f > t) { var x = f; f = t; t = x; }
+        }
+        closeSheet();
+        await dbPut('memories', { id: uid('mem'), characterId: ch.id, kind: 'summary', seg: true, manual: true, content: v, ts: Date.now(), from: f, to: t, n: cnt });
+        if (move && t > (ch.lastSummaryTs || 0)) { ch.lastSummaryTs = t; await dbPut('characters', ch); }
+        if (cur && cur.id === ch.id) renderMemory(); toast(cnt ? '分段摘要已添加（覆盖 ' + cnt + ' 条，总结指针已前移）' : '分段摘要已添加');
+      } }), h('button', { class: 'btn', text: '取消', onclick: closeSheet }))]);
 }
 $('b-mem-add').onclick = function () {
-  textSheet('新增记忆', '', [{ text: '保存', cls: 'primary', fn: async function (v) {
-    if (!v.trim()) return;
-    await dbPut('memories', { id: uid('mem'), characterId: cur.id, content: v.trim(), ts: Date.now(), kind: 'note' }); renderMemory();
-  } }, { text: '取消' }], '手写的记忆每次都会带给 TA，不会被自动合并（适合核心设定、底线规则、你想让 TA 一直记得的事）。');
+  menuSheet('新增记忆', [
+    ['分段摘要（进过往摘要，不常驻）', addSegSheet],
+    ['手写记忆（常驻，每次都带）', function () {
+      textSheet('新增手写记忆', '', [{ text: '保存', cls: 'primary', fn: async function (v) {
+        if (!v.trim()) return;
+        await dbPut('memories', { id: uid('mem'), characterId: cur.id, content: v.trim(), ts: Date.now(), kind: 'note' }); renderMemory();
+      } }, { text: '取消' }], '手写的记忆每次都会带给 TA，不会被自动合并（适合核心设定、底线规则、你想让 TA 一直记得的事）。想让它只是一段过往经历，请选「分段摘要」。');
+    }]
+  ]);
 };
 /* 要总结的原话：总结指针之后、且已经溢出「短期窗口」的那些（最近 W 条留在窗口里，不总结） */
 async function sumCandidates(char) {
@@ -3362,7 +3529,7 @@ async function summarizeNow(char, silent, force) {
     if (c0.older.length < (force ? 1 : c0.P.S)) { if (!silent) toast('最近的消息都还在短期窗口里，暂时不用总结'); return false; }
     var batch = c0.older.slice(0, 80);   /* 一次最多归纳 80 条，积压多了会分几次追上 */
     var rows = await memLoad(char.id), prior = memProfilePrior(rows, char.id);
-    var sm = await memSummarize(char, batch, prior);   /* 只请求这 1 次 */
+    var sm = await memSummarizeSafe(char, batch, prior);   /* 只请求这 1 次 */
     var now = Date.now(), last = batch[batch.length - 1].ts, changed = sm.profile != null && sm.profile !== prior;
     var rec = { id: uid('mem'), characterId: char.id, kind: 'summary', seg: true, content: sm.seg, ts: now, from: batch[0].ts, to: last, n: batch.length };
     if (settings.memConfirm) { rec.pending = true; if (changed) rec.profile = sm.profile; }
@@ -4092,7 +4259,9 @@ function buildSettingsBase() {
     txt('memStageMax', '合并后的摘要字数上限', 'number', '1500'),
     sw('memAutoCompress', '超过字数自动合并旧摘要', '关掉后摘要只增不减，需要时自己点记忆页的「精炼」'),
     sw('memConfirm', '总结后先让我确认', '开启后，新生成的摘要先放进记忆页的「待确认」，你点确认才会带给角色；确认前不会影响聊天。默认关'),
-    txt('memTemp', '总结的温度', 'number', '0.2', '越低越只写事实、越不爱发挥。建议 0–0.3')));
+    txt('memTemp', '总结的温度', 'number', '0.2', '越低越只写事实、越不爱发挥。建议 0–0.3'),
+    txt('sumWords', '总结脱敏：额外敏感词', 'text', '用逗号分隔', '发给总结模型之前，这些词会被替换成「亲密互动」。程序里已内置一份常见词表，这里补你自己遇到过被拦的词'),
+    txt('sumRetry', '被拒答后自动重试次数', 'number', '2', '总结被模型拒绝时，会加强脱敏后自动重发（间隔 2 秒），最多重试这么多次。0 = 不重试。每次重试多花 1 次请求')));
   body.appendChild(h('div', { class: 'group-title', text: '回复长度与总 token' }));
   body.appendChild(h('div', { class: 'group' },
     txt('maxOutTokens', '单次回复最大 token（max_tokens）', 'number', '留空或 0＝不限制', '回复总被截断（说到一半没了）就填一个大一点的数，如 2000–4000。留空则不发这个参数，由模型/中转自己的默认值决定。Gemini 这类会「思考」的模型，思考也算在里面，建议 4000 以上'),
