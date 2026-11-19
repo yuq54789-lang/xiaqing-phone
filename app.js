@@ -256,7 +256,7 @@ function fmtTime(ts, tz) {
 function buildSystem(ctx) {
   var c = ctx.char, s = ctx.settings, L = [], D = false;   /* D：易变的背景（世界书/心声/时间/听歌/手机动态…）不放这里，放到 buildDepth 里紧贴最新消息 */
   L.push('你正在扮演「' + (c.realName || c.name) + '」，' + (c.offlineMode ? '和用户面对面相处。' : '通过手机和用户聊天。'));
-  L.push('# 角色在线状态\n需要更新角色状态时，在 actions.status 中填写 type（online、busy、away、sleeping 之一）和 text（不超过16字）。状态不必每次改变，只在符合当前情境时更新；不要把状态信息写进聊天正文。');
+    L.push('# 角色在线状态\n需要更新角色状态时，在回复最末尾另起一行写 <状态>类型｜短描述</状态>（类型只能是 在线、忙碌、离开、睡觉 之一，短描述不超过 16 字）。状态不必每次改变，只在符合当前情境时更新；不要把状态信息写进聊天正文。');
   if (c.persona) L.push('# 角色设定\n' + c.persona);
   var me = [];
   if (c.userNickname) me.push('你称呼用户为：' + c.userNickname);
@@ -288,7 +288,7 @@ function buildSystem(ctx) {
   L.push('# 回复要求\n' + (c.offlineMode ? offlineRules(c, ctx.preset) : OUTPUT_RULES));
   if (ctx.wantThought) L.push('# 心声（附加输出）\n' + THOUGHT_RULES);
   if (ctx.musicText) L.push(ctx.musicText);
-  if (ctx.musicState) L.push('# 当前一起听状态\\n' + ctx.musicState);
+  if (ctx.musicState) L.push('# 当前一起听状态\n' + ctx.musicState);
   if (!c.offlineMode) L.push('# 拍一拍与转账\n' + ACT_RULES);
   if (ctx.periodText) L.push(ctx.periodText);
   if (ctx.watchText) L.push(PW_RULES + ctx.watchText);
@@ -485,15 +485,36 @@ function fixTagLine(ln) {
   if (bm && KNOWN_TAG_NAMES.some(function (n) { return n.toLowerCase().indexOf(bm[1].toLowerCase()) === 0; })) ln = ln.slice(0, bm.index);
   return ln;
 }
+/* 剔除模型误复读出来的计时标签与系统提示，防止掉进聊天气泡 */
+var RE_INTERVAL_TAG = /(?:[\[【［(（]\s*间隔\s*[:：]?\s*[^\]】］)）\r\n]+[\]】］)）]?)[ \t]*/g;
+var RE_INTERVAL_TAIL = /(?:[\[【［(（]\s*间隔\s*[:：]?\s*[^\]】］)）\r\n]{0,20})$/;
+var RE_SYS_LEAK = /(?:[\[【［]\s*(?:系统提示|用户撤回了一条消息|用户删除了|用户发来(?:一条语音|一张图片)|用户发送了一张图片)[^\]】］\r\n]*[\]】］]?)[ \t]*/g;
+var RE_EDIT_LEAK = /[（(]\s*(?:这句是你之前说的，被用户改成了现在这样|用户事后编辑过这条消息)[^）)\r\n]*[）)]/g;
+
+function stripSystemLeaks(ln) {
+  return String(ln || '')
+    .replace(RE_INTERVAL_TAG, '')
+    .replace(RE_INTERVAL_TAIL, '')
+    .replace(RE_SYS_LEAK, '')
+    .replace(RE_EDIT_LEAK, '')
+    .trim();
+}
+
 function cleanModelText(text) {
-  var t = String(text || '').replace(/\r/g, '').replace(/[�​-‍⁠﻿\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '');
+  /* 修复原正则里零宽字符范围写反的问题 */
+  var t = String(text || '').replace(/\r/g, '').replace(/[\uFFFD\u200B-\u200D\uFEFF\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '');
   var tj = t.trim().replace(/^\x60{3}(?:json)?\s*/i, '').replace(/\s*\x60{3}$/, '');
   if (/^\s*(?:\[\s*)?\{\s*"(?:chatResponse|type|content|messages|actions|text)"/.test(tj)) {
     var ok = true; try { JSON.parse(tj); } catch (e) { ok = false; }
     if (!ok) return salvageJsonReply(tj);
   }
-  return t.split('\n').map(fixTagLine).join('\n').replace(/\n{3,}/g, '\n\n');
+  return t.split('\n')
+    .map(function (ln) { return fixTagLine(stripSystemLeaks(ln)); })
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
 }
+
 /* 一条历史消息 -> 给模型看的文字 */
 /* 消息被用户编辑过：让角色知道原话是什么 */
 function msgToText(m) {
@@ -2855,8 +2876,9 @@ async function buildPrompt(char) {
   var P = ctxParams(char), ptr = char.lastSummaryTs || 0;
   var recentRows = await pageMessages(char.id, null, P.W + P.S);
   /* 开了自动总结：带「总结指针」之后的全部原话（最多 窗口+步长 条）；没开：只带最近 窗口 条 */
-  var history = P.auto ? recentRows.filter(function (m) { return m.ts > ptr; }) : recentRows.slice(-P.W);
-  if (P.auto && history.length < Math.min(P.W, recentRows.length)) history = recentRows.slice(-P.W);
+   var history = P.auto ? recentRows.filter(function (m) { return m.ts > ptr; }) : recentRows.slice(-P.W);
+  /* 只有在总结指针之后完全没有新消息时，才兜底带最近 4 条，不再把已总结过的旧原话整批塞回来 */
+  if (P.auto && !history.length) history = recentRows.slice(-4);
   var lastAi = -1; history.forEach(function (m, i) { if (m.role === 'assistant' && !m.hidden && m.type !== 'pat' && m.type !== 'system') lastAi = i; });
   var wavs = {}, audioUsed = false, dictIds = [];
   if ((settings.voiceSend || 'audio') === 'audio') {
@@ -3619,7 +3641,7 @@ onShow['s-char'] = async function () {
     userNickname: h('input', { type: 'text', value: c.userNickname || '' }),
     userPersona: h('textarea', {}), persona: h('textarea', { style: 'min-height:220px' }),
     ctx: h('input', { type: 'number', value: c.contextLimit || '', placeholder: '默认 ' + (settings.ctxWindow || 25) }),
-    interval: h('input', { type: 'number', value: (c.autoMemory && c.autoMemory.step) || '', placeholder: '默认 ' + (settings.ctxStep || 10) })
+    interval: h('input', { type: 'number', value: (c.autoMemory && c.autoMemory.step) || '', placeholder: '默认 ' + (settings.ctxStep || 30) })
   };
   f.userPersona.value = c.userPersona || ''; f.persona.value = c.persona || '';
   var auto = switchEl(c.autoMemory && c.autoMemory.enabled);
