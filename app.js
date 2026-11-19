@@ -768,7 +768,7 @@ function sumSanitize(text, level) {
   });
   return out.join('\n');
 }
-var SUM_REFUSE_RE = /违反.{0,12}(规则|政策|准则|条款|规定)|无法(为你|为您|帮你|帮助|协助|总结|处理|继续|完成|满足|生成|提供)|不能(为你|为您|帮你|帮助|协助|总结|处理|继续|完成|满足|生成|提供)|(抱歉|对不起)[，,。！!\s]*我(无法|不能|没办法)|作为(一个)?(AI|人工智能|语言模型)|内容(政策|审核|安全)|安全(规则|政策|准则|策略|审查)|不适合(总结|处理)|I (?:can(?:no|')t|am unable|won't)|I'm (?:sorry|unable)|I am sorry|as an AI|content policy|against (?:my|the) (?:guidelines|polic)/i;
+var SUM_REFUSE_RE = /违反.{0,12}(规则|政策|准则|条款|规定)|无法(为你|为您|帮你|帮助|协助|总结|处理|继续|完成|满足|生成|提供)|不能(为你|为您|帮你|帮助|协助|总结|处理|继续|完成|满足|生成|提供)|(抱歉|对不起)[，,。！!\s]*我(无法|不能|没办法)|作为(一个)?(AI|人工智能|语言模型)|内容(政策|审核|安全)|安全(规则|政策|准则|策略|审查)|不适合(总结|处理)|I (?:can(?:no|')t|am unable|won't)|I'm (?:sorry|unable)|I am sorry|as an AI|content policy|against (?:my|the) (?:guidelines|polic)|blockReason|PROHIBITED_CONTENT|Prohibited Use policy|could not be submitted/i;
 /* 摘要是第三人称叙述：拒答话术通常出现在开头，或者整段很短 */
 function memIsRefusal(out, seg) {
   var t = String(seg == null ? out : seg).trim();
