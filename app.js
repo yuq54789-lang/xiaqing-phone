@@ -743,28 +743,42 @@ function secondaryApi() {
   };
 }
 /* ---- 总结防拒答：发送前脱敏 / 识别拒答 / 撞红线自动重试 ---- */
-var SUM_WORDS_BASE = ['做爱', '性爱', '性交', '上床', '啪啪', '口交', '肛交', '手淫', '自慰', '射精', '高潮', '勃起', '阴茎', '阴道', '阴蒂', '乳头', '奶子', '乳房', '下体', '私处', '小穴', '抽插', '内射', '精液', '淫荡', '淫水', '裸体', '脱光', '全裸', '情趣', '春药', '潮喷'];
-var SUM_WORDS_STRONG = ['亲吻', '接吻', '舌吻', '爱抚', '抚摸', '脱衣', '脱掉', '赤裸', '床上', '喘息', '呻吟', '娇喘', '欲望', '情欲', '湿了', '硬了', '挑逗', '撩拨', '肌肤'];
+/* 核心涉黄词（1档直接整句替换） */
+var SUM_WORDS_BASE = ['做爱', '性爱', '性交', '上床', '啪啪', '口交', '肛交', '手淫', '自慰', '射精', '高潮', '勃起', '阴茎', '阴道', '阴蒂', '乳头', '奶子', '乳房', '下体', '私处', '小穴', '抽插', '内射', '精液', '淫荡', '淫水', '裸体', '脱光', '全裸', '情趣', '春药', '潮喷', '肉棒', '花穴', '蜜汁', '浪叫', '发情', '交合', '欢爱', '床事', '滚床单', '腿心', '敏感带', '吞吐', '顶弄', '撞击', '贯穿', '汁液'];
+/* 亲密/擦边描写词（2档也整句替换） */
+var SUM_WORDS_STRONG = ['亲吻','色色', '接吻', '舌吻', '爱抚', '抚摸', '脱衣', '脱掉', '赤裸', '床上', '喘息', '呻吟', '娇喘', '欲望', '情欲', '湿了', '硬了', '挑逗', '撩拨', '肌肤', '舔', '吮', '啃咬', '褪去', '扯开', '内衣', '浴巾', '锁骨', '耳垂', '脖颈', '胸口', '腰肢', '大腿', '滚烫', '灼热', '酥麻', '轻喘', '低喘', '抵住', '埋进', '揉捏', '摩挲', '衣衫', '解开', '扣子', '拉链', '被窝', '床单'];
 function sumEsc(w) { return String(w).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
 function sumExtraWords() {
   var x = (typeof settings !== 'undefined' && settings && settings.sumWords) ? String(settings.sumWords) : '';
   return x.split(/[,，、;；\n]+/).map(function (w) { return w.trim(); }).filter(Boolean);
 }
-/* level 1：敏感词换成「亲密互动」；2：含敏感内容的整句换成「（发生了亲密互动）」；3：再去掉括号动作，每句最多留 40 字 */
+/* level 1：命中核心词的整句替换成「（已略去亲密互动）」；
+ * level 2：命中亲密/擦边词的整句也替换成「（已略去亲密互动）」；
+ * level 3：再去掉括号动作，每行最多留 40 字 */
 function sumSanitize(text, level) {
   level = level || 1;
-  var base = SUM_WORDS_BASE.concat(sumExtraWords()), reB = new RegExp(base.map(sumEsc).join('|'), 'g');
+  var base = SUM_WORDS_BASE.concat(sumExtraWords());
+  var reB = new RegExp(base.map(sumEsc).join('|'));
   var reS = new RegExp(SUM_WORDS_STRONG.concat(base).map(sumEsc).join('|'));
+  var activeRe = level >= 2 ? reS : reB;
   var out = [], prev = null;
   String(text || '').split('\n').forEach(function (ln) {
-    var lab = (ln.match(/^([^：\n]{1,20})：/) || [''])[0], hit = reS.test(ln);
-    ln = ln.replace(reB, '亲密互动');
-    if (level >= 2 && hit) ln = lab + '（发生了亲密互动）';
-    if (level >= 3 && !hit) ln = ln.replace(/[（(][^）)]*[）)]/g, '').replace(/\*[^*]*\*/g, '');
-    if (level >= 3 && ln.length > 40 + lab.length) ln = ln.slice(0, 40 + lab.length) + '…';
-    ln = ln.replace(/亲密互动(?:[、，,\s]*亲密互动)+/g, '亲密互动');
-    if (ln === prev) return;
-    prev = ln; out.push(ln);
+    var mLab = ln.match(/^([^：\n]{1,20}：)/);
+    var lab = mLab ? mLab[1] : '';
+    var body = mLab ? ln.slice(lab.length) : ln;
+    /* 按标点切分成单句，逐句检查，命中就把整句替换掉 */
+    var sents = body.split(/(?<=[。！？!?…\n])/).map(function (s) {
+      return activeRe.test(s) ? '（已略去亲密互动）' : s;
+    });
+    body = sents.join('').replace(/(?:（已略去亲密互动）[，,。！？!?\s]*)+/g, '（已略去亲密互动）');
+    if (level >= 3 && body !== '（已略去亲密互动）') {
+      body = body.replace(/[（(][^）)]*[）)]/g, '').replace(/\*[^*]*\*/g, '');
+      if (body.length > 40) body = body.slice(0, 40) + '…';
+    }
+    var res = lab + body;
+    if (res === prev) return;
+    prev = res;
+    out.push(res);
   });
   return out.join('\n');
 }
@@ -792,7 +806,7 @@ async function memSummarize(char, msgs, prior, level) {
     '【本段摘要】用第三人称，以「' + her + '」「' + me + '」作主语，按时间顺序客观写出这段聊天里发生的事，一件事一句。必须保留：日期、人名地点物品等具体的词、做出的约定和承诺、计划、重要的决定、双方情绪的明显变化。不要写寒暄，不要写感想和评价。不超过 ' + segMax + ' 字。\n' +
     '【固定信息】把新聊天里出现的、长期有效的信息并进已有固定信息，输出更新后的完整清单，每行一条，内容限于：称呼与昵称、生日与纪念日、喜好与厌恶、忌口与过敏、职业与作息、重要的人和关系、长期约定、双方关系的关键节点。新旧信息矛盾时以新的为准（删旧留新）；没有变化就原样照抄；确实什么都没有就只写「无」。不超过 ' + prMax + ' 字。' + sumGuardText(level);
   var out = (await callLLM({ base: api.base, key: api.key, model: api.model, temperature: memNum(settings.memTemp, 0.2, 0, 1), system: system,
-    messages: [{ role: 'user', content: '【已有固定信息】\n' + (sumSanitize(prior || '', 1) || '（空）') + '\n\n【新聊天记录】\n' + sumSanitize(memTranscript(msgs, char), level) }], stream: false })).trim();
+    messages: [{ role: 'user', content: '【已有固定信息】\n' + (sumSanitize(prior || '', level) || '（空）') + '\n\n【新聊天记录】\n' + sumSanitize(memTranscript(msgs, char), level) }], stream: false })).trim();
   if (!out) { var e0 = new Error('总结返回了空内容'); e0.refusal = true; throw e0; }
   var r = parseMemOut(out);
   if (memIsRefusal(out, r.seg)) { var e1 = new Error('总结被拒答或没写出有效摘要（模型返回：' + out.slice(0, 80).replace(/\n/g, ' ') + '）'); e1.refusal = true; throw e1; }   /* 拒答话术不入库 */
