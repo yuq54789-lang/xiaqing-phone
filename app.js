@@ -3152,6 +3152,9 @@ if (fresh || !r || !r.active) r = rounds[char.id] = { active: true, won: false, 
     if (!r.active || r.won) return;
     text = cleanModelText(text);   /* 乱码 / 缺右括号 / 半截标签 / 被截断的 JSON */
     var dict = extractDictation(text);   /* 用户语音的文字也随回复一起回来，不另外请求 */
+    /* 听写标签比待听写的语音条数多：多出来的是模型把自己的回复错包进了标签，当正常回复显示，不丢 */
+    var nDict = (prompt.dictIds || []).length;
+    if (dict.texts.length > nDict) { var extraDict = dict.texts.splice(nDict).filter(Boolean); dict.reply = extraDict.join('\n') + (dict.reply ? '\n' + dict.reply : ''); }
     var structured = parseStructuredResponse(dict.reply);
     var normalizedReply = structured ? structured.text : dict.reply;
     var mc = extractMusicCmd(normalizedReply);   /* 结构化 music 动作与旧 [CMD:…] 统一处理 */
@@ -3161,7 +3164,15 @@ if (fresh || !r || !r.active) r = rounds[char.id] = { active: true, won: false, 
     var ex = extractThought(st.reply), replyText = ex.reply;   /* 心声同理 */
     if (settings.autoStripFormat !== false) replyText = stripExtraFormat(replyText);
     var items = char.offlineMode ? (replyText.trim() ? [{ type: 'offline', content: replyText.trim() }] : []) : parseReplyLines(splitReply(jsonReplyToLines(replyText) || replyText, 20), prompt.pool, !char.offlineMode), base = Date.now(), saved = [];
-    if (!items.length && !ac.acts.length) throw new Error('模型的回复里没有可显示的内容（只有找不到的表情包）。原始回复：' + text.slice(0, 200));
+    if (!items.length && !ac.acts.length) {
+      /* 过滤完什么都没剩：不再报错（请求已经成功、额度已经花了）。把模型原话去掉标签外壳后直接发进聊天，不对就自己删 */
+      if (dict.texts.length) toast('模型这次只写了语音的文字，没有写回复，可以重新生成一次');   /* 只有听写：发出来会变成 AI 复述你的话，所以不发气泡 */
+      else {
+        var rawTxt = String(text || ''), fb = rawTxt.replace(/<\/?(?:听写|状态|心声|朋友圈)[^>]*>/g, '').trim() || rawTxt.trim();
+        if (!fb) throw new Error('模型返回了空内容');
+        items = char.offlineMode ? [{ type: 'offline', content: fb }] : splitReply(fb, 20).map(function (s) { return { type: 'text', content: s }; });
+      }
+    }
     r.won = true;
     var actItems = ac.acts.length ? await applyActs(char, ac.acts) : [];
     actItems.forEach(function (a) { items.push(a); });
