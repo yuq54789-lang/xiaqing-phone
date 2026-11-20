@@ -117,6 +117,7 @@ var DEFAULTS = {
   iconUrls: {},                  /* 自定义桌面图标：{ 应用名: 图片网址或 data URI } */
   asrLang: 'zh-CN',              /* 语音识别语言 */
   showTime: true,                /* 每条气泡下面显示时间（几点几分） */
+  autoStripFormat: true,         /* 自动去格式：清除 AI 回复里的 Markdown 符号、多余 HTML/XML 标签与空行（新旧消息均生效） */
     enterSend: false,              /* 回车发送（电脑键盘）：开=Enter 发送、Shift+Enter 换行；关=Enter 换行、Ctrl+Enter 发送 */
   sysNotify: false,              /* 页面在后台时发系统通知（需要浏览器允许） */
   voiceSend: 'audio'             /* 发语音给 AI 的方式：audio=直接发音频（Gemini 等能听的模型）；text=只发文字+语气提示 */
@@ -536,6 +537,10 @@ function msgToTextBase(m) {
   }
   if (t === 'recalled') { var og = meta.orig && meta.orig.desc; return og ? '[用户撤回了一条消息。撤回前的内容：「' + String(og).slice(0, 200) + '」]' : '[用户撤回了一条消息]'; }
   if (t === 'pat' || t === 'system') return c.charAt(0) === '[' ? c : '[系统提示：' + c + ']';
+  if (m.role === 'assistant' && settings.autoStripFormat !== false && (t === 'text' || t === 'offline') && c) {
+    var cClean = stripExtraFormat(c);
+    if (cClean) c = cClean;
+  }
   if (meta.quote && typeof meta.quote === 'object') {
     var q = meta.quote.content || meta.quote.text || '';
     if (q) return '[引用：' + String(q).slice(0, 60).replace(/[\[\]［］【】]/g, '') + ']' + c;   /* 和要求模型输出的格式完全一致，模型才不会仿写成别的样子 */
@@ -887,21 +892,31 @@ function parseStatusBody(body) {
   return { type: ty, text: String(mm[2] || '').trim().slice(0, 16) };
 }
 function extractStatus(text) {
-  var t = String(text || ''), status = null;
-  var m = t.match(/<状态>([\s\S]*?)<\/状态>/);
-  if (m) {
-    t = t.replace(m[0], '');
-    status = parseStatusBody(m[1]);
-  } else {
-    var i = t.indexOf('<状态>');
-    if (i !== -1) { status = parseStatusBody(t.slice(i + 4).split('\n')[0]); t = t.slice(0, i); }
+  var t = String(text || ''), status = null, re = /<状态>([\s\S]*?)<\/状态>/g, m;
+  while ((m = re.exec(t))) {
+    var parsed = parseStatusBody(m[1]);
+    if (parsed) status = parsed;
+  }
+  t = t.replace(re, '');
+  var i = t.indexOf('<状态>');
+  if (i !== -1) {
+    var p2 = parseStatusBody(t.slice(i + 4).split('\n')[0]);
+    if (p2) status = p2;
+    t = t.slice(0, i);
   }
   return { reply: t.trim(), status: status };
 }
 function extractThought(text) {
-  var t = String(text || ''), th = null, reply = t, m = t.match(/<心声>([\s\S]*?)<\/心声>/);
-  if (m) { reply = t.replace(m[0], ''); try { th = parseThought(m[1]); } catch (e) {} }
-  else { var i = t.indexOf('<心声>'); if (i !== -1) { reply = t.slice(0, i); try { th = parseThought(t.slice(i + 4)); } catch (e) {} } }   /* 被截断、没写结束标签 */
+  var t = String(text || ''), th = null, re = /<心声>([\s\S]*?)<\/心声>/g, m;
+  while ((m = re.exec(t))) {
+    try { var parsed = parseThought(m[1]); if (parsed) th = parsed; } catch (e) {}
+  }
+  var reply = t.replace(re, '');
+  var i = reply.indexOf('<心声>');
+  if (i !== -1) {
+    try { var p2 = parseThought(reply.slice(i + 4)); if (p2) th = p2; } catch (e) {}
+    reply = reply.slice(0, i);
+  }   /* 被截断、没写结束标签 */
   return { reply: reply.trim(), thought: th };
 }
 
@@ -925,14 +940,71 @@ function parseMomentsBody(body) {
   return any ? d : null;
 }
 function extractMoments(text) {
-  var t = String(text || ''), m = t.match(/<朋友圈>([\s\S]*?)<\/朋友圈>/), data = null;
-  if (!m) { var i = t.indexOf('<朋友圈>'); if (i === -1) return { reply: t.trim(), data: null }; try { data = parseMomentsBody(t.slice(i + 5)); } catch (e) { data = null; } return { reply: t.slice(0, i).trim(), data: data }; }   /* 没写结束标签：照样认 */
-  try { data = parseMomentsBody(m[1]); } catch (e) { data = null; }
-  return { reply: t.replace(m[0], '').trim(), data: data };
+  var t = String(text || ''), data = null, re = /<朋友圈>([\s\S]*?)<\/朋友圈>/g, m;
+  while ((m = re.exec(t))) {
+    try { var parsed = parseMomentsBody(m[1]); if (parsed) data = parsed; } catch (e) {}
+  }
+  t = t.replace(re, '');
+  var i = t.indexOf('<朋友圈>');
+  if (i !== -1) {
+    try { var p2 = parseMomentsBody(t.slice(i + 5)); if (p2) data = p2; } catch (e) {}
+    t = t.slice(0, i);
+  }   /* 没写结束标签：照样认 */
+  return { reply: t.trim(), data: data };
+}
+
+/* 通用自动去格式（免导入正则）：
+ * 在提取完 <听写>/<状态>/<心声>/<朋友圈>/[拍一拍]/[转账]/[CMD] 之后执行；
+ * 1) 隐藏/样式/状态栏/思考类标签：连标签带内部内容一起删掉
+ * 2) 其他未知 XML/HTML 标签：只脱掉 <...> 外壳，保留里面的正文
+ * 3) Markdown 排版符号（**、*、~~、###、```、---、>、[链接](url)）：去掉符号、保留正文
+ * 4) 不误伤内置方括号标签（[表情包：…]、[语音：…]、[引用：…]）以及数学符号（a < 3） */
+var RE_DROP_BLOCK_TAG = /<(style|script|details|summary|status|statusbar|state|hud|cot|analysis|reasoning|reflection|planning|plan|meta|system|ooc|note|notes|memory|memo|reminder|prompt|instruction|instructions|debug|log|logs|thinking|think|thought|thoughts|scratchpad|inner_monologue|monologue|状态栏|状态面板|属性栏|属性面板|思维链|思考过程|思考|小剧场|系统提示|注释)(?:\s[^>]*)?>[\s\S]*?<\/\1>/gi;
+var RE_DROP_OPEN_TAG = /<(style|script|details|summary|status|statusbar|cot|analysis|reasoning|scratchpad|状态栏|状态面板|思维链|思考过程)(?:\s[^>]*)?>[\s\S]*$/i;
+function stripExtraFormat(text) {
+  var t = String(text || '');
+  if (!t) return '';
+  t = t.replace(/\r/g, '');
+  /* HTML 注释 */
+  t = t.replace(/<!--[\s\S]*?-->/g, '');
+  /* 后台/状态栏/样式/思考块：循环删除（兼容嵌套） */
+  var prev, guard = 0;
+  do {
+    prev = t;
+    t = t.replace(RE_DROP_BLOCK_TAG, '');
+  } while (t !== prev && ++guard < 8);
+  t = t.replace(RE_DROP_OPEN_TAG, '');
+  /* 常见块级/换行 HTML 标签先换成换行，防止段落粘在一起 */
+  t = t.replace(/<br\s*\/?>/gi, '\n');
+  t = t.replace(/<\/(?:p|div|li|tr|h[1-6]|blockquote)>/gi, '\n');
+  /* 其余未知 XML/HTML 标签：只脱壳、留正文（标签名须以字母或汉字开头，不误伤 a < 3 或 <3） */
+  t = t.replace(/<\/?[a-zA-Z\u4e00-\u9fa5][a-zA-Z0-9_\-:\u4e00-\u9fa5]*(?:\s+[^<>]*)?\/?>/g, '');
+  /* Markdown 代码围栏与行内代码 */
+  t = t.replace(/^\s*\x60{3}[a-zA-Z0-9_-]*\s*$/gm, '');
+  t = t.replace(/\x60{3}/g, '');
+  t = t.replace(/\x60([^\x60\n]+)\x60/g, '$1');
+  /* Markdown 图片与链接（不影响 [表情包：…] 这类不带 (url) 的标签） */
+  t = t.replace(/!\[[^\]\n]*\]\([^)\n]+\)/g, '');
+  t = t.replace(/\[([^\]\n]+)\]\((?:https?:\/\/|www\.)[^)\n]+\)/gi, '$1');
+  /* Markdown 标题、分割线、引用前缀 */
+  t = t.replace(/^[ \t]*#{1,6}[ \t]+/gm, '');
+  t = t.replace(/^[ \t]*(?:[-*_][ \t]*){3,}$/gm, '');
+  t = t.replace(/^[ \t]*>[ \t]?/gm, '');
+  /* Markdown 粗斜体、删除线、下划线加粗 */
+  t = t.replace(/\*\*\*([^*\n]+)\*\*\*/g, '$1');
+  t = t.replace(/\*\*([^*\n]+)\*\*/g, '$1');
+  t = t.replace(/(^|[^\w*])\*([^*\n]+)\*(?=[^\w*]|$)/g, '$1$2');
+  t = t.replace(/~~([^~\n]+)~~/g, '$1');
+  t = t.replace(/__([^_\n]+)__/g, '$1');
+  /* 常见 HTML 实体还原 */
+  t = t.replace(/&nbsp;/gi, ' ').replace(/&lt;/gi, '<').replace(/&gt;/gi, '>').replace(/&quot;/gi, '"').replace(/&#39;|&apos;/gi, "'").replace(/&amp;/gi, '&');
+  /* 清理行尾空格与多余空行 */
+  t = t.replace(/[ \t]+$/gm, '').replace(/\n{3,}/g, '\n\n').trim();
+  return t;
 }
 
 /* 导出给测试用 */
-if (typeof module !== 'undefined') module.exports = { extractMusicCmd: extractMusicCmd, extractMoments: extractMoments, cleanModelText: cleanModelText, parseStatusBody: parseStatusBody, extractStatus: extractStatus, extractThought: extractThought, offlineRules: offlineRules, triggeredEntries: triggeredEntries, buildSystem: buildSystem, buildDepth: buildDepth, memForPrompt: memForPrompt, memCollect: memCollect, parseMemOut: parseMemOut, memIsRefusal: memIsRefusal, sumSanitize: sumSanitize, memLabel: memLabel, memLine: memLine, memProfilePrior: memProfilePrior, memTranscript: memTranscript, ctxParams: ctxParams, muRulesText: muRulesText, muStateText: muStateText, msgToText: msgToText, toApiMessages: toApiMessages, splitReply: splitReply, parseThought: parseThought, openaiUrl: openaiUrl, stickerPool: stickerPool, sampleStickers: sampleStickers, parseReplyLines: parseReplyLines, findSticker: findSticker };
+if (typeof module !== 'undefined') module.exports = { stripThinking: stripThinking, stripNakedThinking: stripNakedThinking, stripExtraFormat: stripExtraFormat, extractMusicCmd: extractMusicCmd, extractMoments: extractMoments, cleanModelText: cleanModelText, parseStatusBody: parseStatusBody, extractStatus: extractStatus, extractThought: extractThought, offlineRules: offlineRules, triggeredEntries: triggeredEntries, buildSystem: buildSystem, buildDepth: buildDepth, memForPrompt: memForPrompt, memCollect: memCollect, parseMemOut: parseMemOut, memIsRefusal: memIsRefusal, sumSanitize: sumSanitize, memLabel: memLabel, memLine: memLine, memProfilePrior: memProfilePrior, memTranscript: memTranscript, ctxParams: ctxParams, muRulesText: muRulesText, muStateText: muStateText, msgToText: msgToText, toApiMessages: toApiMessages, splitReply: splitReply, parseThought: parseThought, openaiUrl: openaiUrl, stickerPool: stickerPool, sampleStickers: sampleStickers, parseReplyLines: parseReplyLines, findSticker: findSticker };
 
 /* ---------- ⑤ 界面 ---------- */
 var $ = function (id) { return document.getElementById(id); };
@@ -1910,7 +1982,12 @@ function msgNode(m) {
     b = h('div', { class: 'bubble' + (t === 'voice' ? ' voice' : '') + (t === 'offline' ? ' offline' : '') });
     if (meta.quote && typeof meta.quote === 'object' && (meta.quote.content || meta.quote.text))
       b.appendChild(h('div', { class: 'quote', text: String(meta.quote.content || meta.quote.text) }));
-    b.appendChild(document.createTextNode(m.content));
+    var dispText = m.content;
+    if (!me && settings.autoStripFormat !== false && dispText) {
+      var cleanedDisp = stripExtraFormat(extractThought(extractStatus(extractMoments(dispText).reply).reply).reply);
+      if (cleanedDisp) dispText = cleanedDisp;
+    }
+    b.appendChild(document.createTextNode(dispText));
   }
   var row = h('div', { class: 'row' + (me ? ' me' : ''), 'data-id': m.id });
   bindLongPress(b, function () { if (!selMode) messageMenu(m, b); });
@@ -2675,6 +2752,50 @@ function stripLeakedPlan(t) {
   if (m && /(response|reply|message|answer|write|respond|natural|character|persona|draft|plan|user)/i.test(m[1])) raw = raw.slice(m[0].length);
   return raw.replace(/^\s+/, '');
 }
+/* 拦截反代/思考模型漏进正文的「裸奔思考过程」（不带 <think> 标签，以「思考过程：」「Thinking Process:」或「1. 分析用户输入：」开头的编号分析清单） */
+var RE_NAKED_HEAD = /^\s*(?:\*{1,2}|#{1,4}\s*)?(?:思考过程|思维过程|推理过程|分析过程|思考|Thinking\s*Process|Thought\s*Process|Reasoning\s*Process|Thinking|Reasoning)\s*[:：]?\s*(?:\*{1,2})?\s*$/i;
+var RE_NAKED_STEP1 = /^\s*(?:\*{1,2})?(?:1[\.、]|一、)\s*(?:分析用户|理解用户|角色设定|设定与|世界书|检查约束|构思回复|回复策略|Analyze|User\s*Input|Character|Context|Constraints)/i;
+var RE_NAKED_STEP = /^\s*(?:\*{1,2})?(?:\d+[\.、]|[一二三四五六七八九十]+、)\s*\S/;
+var RE_NAKED_BULLET = /^\s*(?:[-*•·]|\d+\))\s+\S/;
+var RE_NAKED_DELIM = /^\s*(?:(?:\*{1,2}|#{1,4}\s*)?(?:正式回复|最终回复|回复内容|回复|输出|正文|Final\s*Response|Response|Reply|Output)\s*[:：]\s*(?:\*{1,2})?|[-*_]{3,})\s*$/i;
+var RE_NAKED_GLUE = /^\s*[-*•·]\s*[^。\n]{2,50}(?:标签|预设|声音|表情|语音|约束|规则|标点|引号|句号|逗号|分段|格式|心声|状态|人设|设定|世界书|检查|确认|输出|回复|口语|字数)[^。\n]*。\s*(.+)$/;
+function stripNakedThinking(text) {
+  var t = String(text || '').replace(/\r/g, '');
+  var lines = t.split('\n');
+  var i = 0;
+  while (i < lines.length && !lines[i].trim()) i++;
+  if (i >= lines.length) return text;
+  var first = lines[i].trim();
+  var isHead = RE_NAKED_HEAD.test(first);
+  var isStep1 = RE_NAKED_STEP1.test(first);
+  if (!isHead && !isStep1) return text;
+  var look = lines.slice(i + (isHead ? 1 : 0), i + 12);
+  var hasList = look.some(function (ln) { return RE_NAKED_STEP.test(ln) || RE_NAKED_BULLET.test(ln); });
+  if (!hasList) return text;
+  if (isHead) i++;
+  var glueTail = '';
+  while (i < lines.length) {
+    var ln = lines[i];
+    if (!ln.trim()) { i++; continue; }
+    if (RE_NAKED_DELIM.test(ln)) { i++; break; }
+    if (RE_NAKED_STEP.test(ln)) { i++; continue; }
+    if (RE_NAKED_BULLET.test(ln)) {
+      var j = i + 1;
+      while (j < lines.length && !lines[j].trim()) j++;
+      var nextIsList = j < lines.length && (RE_NAKED_STEP.test(lines[j]) || RE_NAKED_BULLET.test(lines[j]) || RE_NAKED_DELIM.test(lines[j]));
+      if (!nextIsList) {
+        var gm = ln.match(RE_NAKED_GLUE);
+        if (gm && gm[1] && gm[1].trim()) glueTail = gm[1].trim();
+      }
+      i++;
+      continue;
+    }
+    break;
+  }
+  var rest = lines.slice(i).join('\n').trim();
+  if (glueTail) rest = rest ? (glueTail + '\n' + rest) : glueTail;
+  return rest ? rest : text;
+}
 function stripThinking(text) {
   var t = String(text || '');
   t = t.replace(/<(think|thinking|thought|thoughts)>[\s\S]*?<\/\1>/gi, '');
@@ -2691,6 +2812,7 @@ function stripThinking(text) {
     t = t.slice(0, m.index) + rest.slice(end);
   }
   t = t.replace(/🫧\s*\/\s*(?:thoughts?|thinking|think|reasoning)\s*[:：]?/gi, '');
+  t = stripNakedThinking(t);
   return stripLeakedPlan(t);
 }
 /* 本机转文字（不走你的 API）：新版 Chrome 能直接把录音喂给识别器；旧的就「外放 + 麦克风听」 */
@@ -3037,6 +3159,7 @@ if (fresh || !r || !r.active) r = rounds[char.id] = { active: true, won: false, 
     var mo = extractMoments(ac.reply);   /* 朋友圈互动也随回复一起回来 */
     var st = extractStatus(mo.reply);
     var ex = extractThought(st.reply), replyText = ex.reply;   /* 心声同理 */
+    if (settings.autoStripFormat !== false) replyText = stripExtraFormat(replyText);
     var items = char.offlineMode ? (replyText.trim() ? [{ type: 'offline', content: replyText.trim() }] : []) : parseReplyLines(splitReply(jsonReplyToLines(replyText) || replyText, 20), prompt.pool, !char.offlineMode), base = Date.now(), saved = [];
     if (!items.length && !ac.acts.length) throw new Error('模型的回复里没有可显示的内容（只有找不到的表情包）。原始回复：' + text.slice(0, 200));
     r.won = true;
@@ -4294,6 +4417,7 @@ function buildSettingsBase() {
   body.appendChild(h('div', { class: 'group' },
     sw('stream', '流式输出', '长回复不容易被网关超时掐断。回复会收完再一起显示。'),
     sw('showTime', '显示消息时间', '每条气泡下面显示几点几分。'),
+    sw('autoStripFormat', '自动去格式（免正则）', '开启后自动清除 AI 回复里的 Markdown 符号（**、### 等）和多余 HTML/XML 标签，新旧消息都生效；不影响心声、状态、朋友圈、表情包和语音。'),
     sw('enterSend', '回车发送消息', '开启后按 Enter 直接发送，Shift+Enter 换行（电脑键盘）。关闭时 Enter 是换行，Ctrl+Enter 发送。手机输入法的回车键不受影响。'),
     sw('sysNotify', '后台系统通知', '切到别的 App 或锁屏时，角色发来的第一条消息会弹系统通知。打开时会向浏览器申请通知权限；有些内置浏览器不支持。'),
     txt('bubbleSlow', '气泡出现速度（倍数）', 'number', '1', '模拟真人打字：1=默认，2=再慢一倍，0.5=快一倍，0=不等待、直接全部弹出')));
