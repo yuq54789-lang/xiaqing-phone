@@ -4355,6 +4355,45 @@ function presetGroup(cfg) {
     } }) : null);
   return [h('div', { class: 'group-title', text: cfg.title }), h('div', { class: 'group' }, field(cfg.label, sel, cfg.hint)), row];
 }
+/* ---- TTS 预设：TTS 配置本来就存在浏览器本地（改完即生效，不走右上角「保存」），预设也一样，单独存一份 ---- */
+function ttsPresets() {
+  var o = {}; try { o = JSON.parse(localStorage.getItem('mp_tts_presets') || '{}') || {}; } catch (e) {}
+  return { list: Array.isArray(o.list) ? o.list : [], active: o.active || null };
+}
+function ttsPresetsSave(o) { try { localStorage.setItem('mp_tts_presets', JSON.stringify(o)); } catch (e) { toast('保存失败：浏览器不让写本地存储'); } }
+function ttsPresetGroup() {
+  var pr = ttsPresets(), list = pr.list, active = list.find(function (p) { return p.id === pr.active; });
+  var sel = h('select', {}, h('option', { value: '', text: '（未使用预设）' }));
+  list.forEach(function (p) { sel.appendChild(h('option', { value: p.id, text: p.name })); });
+  sel.value = active ? active.id : '';
+  sel.onchange = function () {
+    var p = list.find(function (x) { return x.id === sel.value; });
+    pr.active = p ? p.id : null; ttsPresetsSave(pr);
+    if (p) ttsSave({ url: p.url || '', key: p.key || '', voice: p.voice || '', model: p.model || 'tts-1' });
+    buildSettings(); toast(p ? '已切换到「' + p.name + '」' : '已取消预设');
+  };
+  function snapshot() { var c = ttsCfg(); return { url: c.url, key: c.key, voice: c.voice, model: c.model }; }
+  var row = h('div', { class: 'btn-row', style: 'margin:8px 0 14px' },
+    h('button', { class: 'btn', text: '另存为新预设', onclick: function () {
+      nameSheet('预设名称', '', async function (name) {
+        var p = Object.assign({ id: uid('tts'), name: name }, snapshot());
+        list.push(p); pr.active = p.id; ttsPresetsSave(pr); buildSettings(); toast('已存为预设「' + name + '」');
+      }, '例如：女声 / 备用接口');
+    } }),
+    active ? h('button', { class: 'btn', text: '更新「' + active.name + '」', onclick: function () {
+      Object.assign(active, snapshot()); ttsPresetsSave(pr); toast('已更新「' + active.name + '」');
+    } }) : null,
+    active ? h('button', { class: 'btn', text: '重命名', onclick: function () {
+      nameSheet('重命名', active.name, async function (name) { active.name = name; ttsPresetsSave(pr); buildSettings(); }, '预设名称');
+    } }) : null,
+    active ? h('button', { class: 'btn danger', text: '删除', onclick: function () {
+      confirmSheet('删除预设「' + active.name + '」？当前填写的内容不会被清空。', '删除', async function () {
+        list.splice(list.indexOf(active), 1); pr.active = null; ttsPresetsSave(pr); buildSettings();
+      }, true);
+    } }) : null);
+  return [h('div', { class: 'group-title', text: 'TTS 预设（一键切换）' }), h('div', { class: 'group' }, field('当前 TTS 预设', sel,
+    '预设包含：接口地址、密钥、音色 ID、模型名称。TTS 的设置不走右上角「保存」：切换、另存、更新都是立刻生效。修改下面的内容后，要点「更新」才会存进预设。')), row];
+}
 function pickModel(mk, bk, kk, done) {
   var q = h('input', { type: 'text', placeholder: '搜索，或直接输入模型名', style: 'width:100%;padding:10px;border:1px solid var(--line);border-radius:8px;background:var(--bg)' });
   var list = h('div', { class: 'mdl-list' }), info = h('div', { class: 'hint', style: 'font-size:12px;color:var(--sub)' });
@@ -4382,11 +4421,15 @@ function pickModel(mk, bk, kk, done) {
 function buildSettings() {
   buildSettingsBase();
   var body = $('settings-body'), kids = Array.prototype.slice.call(body.children);
-  function pair(txt) { var i = kids.findIndex(function (n) { return n.classList.contains('group-title') && n.textContent.indexOf(txt) === 0; }); return i < 0 ? null : [kids[i], kids[i + 1]]; }
-  var main = pair('主 API'), tts = pair('语音合成'), sub = pair('副 API');
-  if (!main || !tts || !sub) return;
+  function titleIdx(txt) { return kids.findIndex(function (n) { return n.classList.contains('group-title') && n.textContent.indexOf(txt) === 0; }); }
+  function pair(txt) { var i = titleIdx(txt); return i < 0 ? null : [kids[i], kids[i + 1]]; }
+  var main = pair('主 API');
+  /* 副 API、TTS 各是一整块：「预设」标题 + 卡片 + 按钮行，再接本体标题 + 卡片，一起挪。顺序：主预设 → 主 API → 副预设 → 副 API → TTS 预设 → TTS */
+  var si = titleIdx('副 API 预设'), subIdx = titleIdx('副 API（'), ti = titleIdx('TTS 预设'), ttsIdx = titleIdx('语音合成');
+  if (!main || si < 0 || subIdx < 0 || ti < 0 || ttsIdx < 0) return;
+  var sub = kids.slice(si, subIdx + 2), tts = kids.slice(ti, ttsIdx + 2);
   var ref = main[1].nextSibling;
-  [tts, sub].forEach(function (p) { body.insertBefore(p[0], ref); body.insertBefore(p[1], ref); });
+  sub.concat(tts).forEach(function (n) { body.insertBefore(n, ref); });
 }
 function buildSettingsBase() {
   function tempField() {
@@ -4443,6 +4486,7 @@ function buildSettingsBase() {
     i.addEventListener('change', function () { tc[key] = i.value.trim(); ttsSave(tc); });
     return field(label, i, hint);
   }
+  ttsPresetGroup().forEach(function (n) { body.appendChild(n); });
   body.appendChild(h('div', { class: 'group-title', text: '语音合成（TTS，兼容 OpenAI 格式；AI 发语音条时用）' }));
   body.appendChild(h('div', { class: 'group' },
     ttsF('url', 'TTS 接口地址', 'https://你的接口域名', 'text', '末尾没写 /v1/audio/speech 会自动补上。只存在这台设备的浏览器里'),
@@ -4828,7 +4872,7 @@ var PARTS = [
   { id: 'stk', name: '表情包', stores: ['stickers', 'stickerCategories'] },
   { id: 'presets', name: '预设（线下写作）', stores: ['offlinePresets'] },
   { id: 'beauty', name: '美化', stores: ['beautyPresets', 'miniPresets'], settings: BEAUTY_KEYS, files: ['homeBgFile', 'notifyFile'], hint: '主题、壁纸、字体、提示音、图标、CSS 及各种美化预设' },
-  { id: 'api', name: 'API 设置', stores: [], settings: API_KEYS_SET, local: ['mp_tts'], hint: '含 API Key 和语音(TTS)接口地址/密钥，请自己保管', secret: true },
+  { id: 'api', name: 'API 设置', stores: [], settings: API_KEYS_SET, local: ['mp_tts', 'mp_tts_presets'], hint: '含 API Key 和语音(TTS)接口地址/密钥，请自己保管', secret: true },
   { id: 'misc', name: '其它设置', stores: [], settingsRest: true, hint: '世界书扫描深度、记忆条数、气泡速度、通知等' }
 ];
 function partOf(id) { return PARTS.find(function (p) { return p.id === id; }); }
