@@ -110,7 +110,7 @@ var DEFAULTS = {
   stream: false, themeId: 'default', customCss: '', homeBg: '', fontUrl: '', fontData: '', fontName: '',
   secBaseUrl: '', secApiKey: '', secModel: '',
   scanDepth: 5, worldBookMaxChars: 6000, defaultContext: 30, ctxWindow: 25, ctxStep: 30,
-  segMax: 300, profileMax: 800, memCompressAt: 6000, memStageMax: 1500, memAutoCompress: true, memConfirm: false, memTemp: 0.2, tokBudgetOn: false, tokBudget: 60000, maxOutTokens: 0, stickerPromptLimit: 60, period: null, myProfile: null, musicApi: '', musicApiBackup: '', apiPresets: [], activePresetId: null, weather: null, homeLayout: null,
+  segMax: 300, profileMax: 800, memCompressAt: 6000, memStageMax: 1500, memAutoCompress: true, memConfirm: false, memTemp: 0.2, tokBudgetOn: false, tokBudget: 60000, maxOutTokens: 0, stickerPromptLimit: 60, period: null, myProfile: null, musicApi: '', musicApiBackup: '', apiPresets: [], activePresetId: null, secApiPresets: [], activeSecPresetId: null, weather: null, homeLayout: null,
   bubbleSlow: 1,                 /* 气泡出现速度倍数：1=默认，越大越慢 */
   notifyUrl: '', notifyName: '', /* 消息提示音（网址 / 上传的文件名） */
   clockLayout: 'h', clockColor: '', dateColor: '', wxColor: '', clockDy: 0, dateDy: 0, wxDy: 0, clockDx: 0, dateDx: 0, wxDx: 0,   /* 时钟：横/竖排、三处文字颜色、三处上下及左右位置（互不绑定） */
@@ -3713,7 +3713,8 @@ $('b-mem-add').onclick = function () {
 /* 要总结的原话：总结指针之后、且已经溢出「短期窗口」的那些（最近 W 条留在窗口里，不总结） */
 async function sumCandidates(char) {
   var P = ctxParams(char), ptr = char.lastSummaryTs || 0;
-  var all = (await pageMessages(char.id, null, 400)).filter(function (m) { return m.ts > ptr && !m.hidden && m.type !== 'system' && m.type !== 'pat'; });
+  /* 取的条数跟着步长走：步长调大、或总结失败积压时，也不会漏掉最旧的原话 */
+  var all = (await pageMessages(char.id, null, Math.max(400, P.S + P.W + 200))).filter(function (m) { return m.ts > ptr && !m.hidden && m.type !== 'system' && m.type !== 'pat'; });
   return { P: P, all: all, older: all.slice(0, Math.max(0, all.length - P.W)) };
 }
 async function summarizeNow(char, silent, force) {
@@ -3722,7 +3723,7 @@ async function summarizeNow(char, silent, force) {
   try {
     var c0 = await sumCandidates(char);
     if (c0.older.length < (force ? 1 : c0.P.S)) { if (!silent) toast('最近的消息都还在短期窗口里，暂时不用总结'); return false; }
-    var batch = c0.older.slice(0, 80);   /* 一次最多归纳 80 条，积压多了会分几次追上 */
+    var batch = c0.older.slice(0, c0.P.S);   /* 一次归纳的条数 = 该角色设置的步长（角色设置没填就用全局步长） */
     var rows = await memLoad(char.id), prior = memProfilePrior(rows, char.id);
     var sm = await memSummarizeSafe(char, batch, prior);   /* 只请求这 1 次 */
     var now = Date.now(), last = batch[batch.length - 1].ts, changed = sm.profile != null && sm.profile !== prior;
@@ -4306,7 +4307,13 @@ function markDirty() { settingsDirty = true; }
 async function commitSettings() {
   settings = JSON.parse(JSON.stringify(draft)); await saveSettings(); settingsDirty = false;
 }
-var PRESET_KEYS = ['baseUrl', 'apiKey', 'model', 'temperature', 'stream', 'secBaseUrl', 'secApiKey', 'secModel'];
+/* 主 API 预设只管主 API；副 API 有自己独立的一套预设（SEC_PRESET_KEYS）——切主预设不会再动副 API 的地址 / Key / 模型 */
+var PRESET_KEYS = ['baseUrl', 'apiKey', 'model', 'temperature', 'stream'];
+var SEC_PRESET_KEYS = ['secBaseUrl', 'secApiKey', 'secModel'];
+var MAIN_PRESET_CFG = { listKey: 'apiPresets', activeKey: 'activePresetId', keys: PRESET_KEYS, idPre: 'api', title: '配置预设（一键切换渠道）', label: '当前预设',
+  hint: '预设包含：反代地址、Key、模型、温度、流式开关。副 API 有自己独立的预设，切换这里不会动副 API。修改下面的内容后，要点「更新」才会存进预设。改完后点右上角「保存」才会生效。' };
+var SEC_PRESET_CFG = { listKey: 'secApiPresets', activeKey: 'activeSecPresetId', keys: SEC_PRESET_KEYS, idPre: 'sapi', title: '副 API 预设（一键切换）', label: '当前副 API 预设',
+  hint: '预设包含：副 API 的反代地址、Key、模型，和主 API 的预设互不影响。修改下面的内容后，要点「更新」才会存进预设。改完后点右上角「保存」才会生效。' };
 function nameSheet(title, init, cb, ph) {
   var inp = h('input', { type: 'text', value: init || '', placeholder: ph || '例如：官方直连 / 备用反代', style: 'width:100%;padding:10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);margin-bottom:10px' });
   openSheet([h('h3', { text: title }), inp, h('div', { class: 'btn-row' },
@@ -4314,24 +4321,25 @@ function nameSheet(title, init, cb, ph) {
     h('button', { class: 'btn', text: '取消', onclick: closeSheet }))]);
   setTimeout(function () { inp.focus(); }, 50);
 }
-function presetGroup() {
-  if (!draft.apiPresets) draft.apiPresets = [];
-  var list = draft.apiPresets, active = list.find(function (p) { return p.id === draft.activePresetId; });
+function presetGroup(cfg) {
+  cfg = cfg || MAIN_PRESET_CFG;
+  if (!draft[cfg.listKey]) draft[cfg.listKey] = [];
+  var list = draft[cfg.listKey], active = list.find(function (p) { return p.id === draft[cfg.activeKey]; });
   var sel = h('select', {}, h('option', { value: '', text: '（未使用预设）' }));
   list.forEach(function (p) { sel.appendChild(h('option', { value: p.id, text: p.name })); });
   sel.value = active ? active.id : '';
   sel.onchange = async function () {
     var p = list.find(function (x) { return x.id === sel.value; });
-    draft.activePresetId = p ? p.id : null;
-    if (p) PRESET_KEYS.forEach(function (k) { draft[k] = p[k] !== undefined ? p[k] : DEFAULTS[k]; });
+    draft[cfg.activeKey] = p ? p.id : null;
+    if (p) cfg.keys.forEach(function (k) { draft[k] = p[k] !== undefined ? p[k] : DEFAULTS[k]; });
     markDirty(); buildSettings(); toast(p ? '已切换到「' + p.name + '」' : '已取消预设');
   };
-  function snapshot() { var o = {}; PRESET_KEYS.forEach(function (k) { o[k] = draft[k]; }); return o; }
+  function snapshot() { var o = {}; cfg.keys.forEach(function (k) { o[k] = draft[k]; }); return o; }
   var row = h('div', { class: 'btn-row', style: 'margin:8px 0 14px' },
     h('button', { class: 'btn', text: '另存为新预设', onclick: function () {
       nameSheet('预设名称', '', async function (name) {
-        var p = Object.assign({ id: uid('api'), name: name }, snapshot());
-        list.push(p); draft.activePresetId = p.id; markDirty(); buildSettings(); toast('已加入预设，记得点右上角「保存」');
+        var p = Object.assign({ id: uid(cfg.idPre), name: name }, snapshot());
+        list.push(p); draft[cfg.activeKey] = p.id; markDirty(); buildSettings(); toast('已加入预设，记得点右上角「保存」');
       });
     } }),
     active ? h('button', { class: 'btn', text: '更新「' + active.name + '」', onclick: async function () {
@@ -4342,11 +4350,10 @@ function presetGroup() {
     } }) : null,
     active ? h('button', { class: 'btn danger', text: '删除', onclick: function () {
       confirmSheet('删除预设「' + active.name + '」？当前填写的内容不会被清空。', '删除', async function () {
-        list.splice(list.indexOf(active), 1); draft.activePresetId = null; markDirty(); buildSettings();
+        list.splice(list.indexOf(active), 1); draft[cfg.activeKey] = null; markDirty(); buildSettings();
       }, true);
     } }) : null);
-  return [h('div', { class: 'group-title', text: '配置预设（一键切换渠道）' }), h('div', { class: 'group' }, field('当前预设', sel,
-    '预设包含：反代地址、Key、模型、温度、流式开关、副 API。修改下面的内容后，要点「更新」才会存进预设。改完后点右上角「保存」才会生效。')), row];
+  return [h('div', { class: 'group-title', text: cfg.title }), h('div', { class: 'group' }, field(cfg.label, sel, cfg.hint)), row];
 }
 function pickModel(mk, bk, kk, done) {
   var q = h('input', { type: 'text', placeholder: '搜索，或直接输入模型名', style: 'width:100%;padding:10px;border:1px solid var(--line);border-radius:8px;background:var(--bg)' });
@@ -4442,6 +4449,7 @@ function buildSettingsBase() {
     ttsF('key', 'TTS 密钥（API Key）', 'sk-…', 'password'),
     ttsF('voice', '音色 ID（Voice ID）', '填服务商给的音色 ID', 'text'),
     ttsF('model', '模型名称', 'tts-1', 'text', '留空则用 tts-1。输入框改完点别处就自动保存，不用点右上角「保存」')));
+  presetGroup(SEC_PRESET_CFG).forEach(function (n) { body.appendChild(n); });
   body.appendChild(h('div', { class: 'group-title', text: '副 API（总结、精炼记忆；留空则用主 API）' }));
   body.appendChild(h('div', { class: 'group' },
     txt('secBaseUrl', '反代地址', 'text', '留空使用主 API'), txt('secApiKey', 'API Key', 'password', '可选'), modelField('模型', 'secModel', 'secBaseUrl', 'secApiKey', '建议用便宜的小模型')));
@@ -4806,7 +4814,7 @@ $('b-pr-save').onclick = async function () {
 /* ====================================================================
  * 数据备份：分区导入导出 / 完整备份 / EPhone(旧小手机)备份导入 / 应急备份
  * ==================================================================== */
-var API_KEYS_SET = ['baseUrl', 'apiKey', 'model', 'temperature', 'stream', 'secBaseUrl', 'secApiKey', 'secModel', 'apiPresets', 'activePresetId'];
+var API_KEYS_SET = ['baseUrl', 'apiKey', 'model', 'temperature', 'stream', 'secBaseUrl', 'secApiKey', 'secModel', 'apiPresets', 'activePresetId', 'secApiPresets', 'activeSecPresetId'];
 /* 分区：id、名称、涵盖的数据库表、涵盖的设置项 */
 var PARTS = [
   { id: 'chars', name: '角色人设', stores: ['characters'], hint: '角色设定、头像、世界书挂载等' },
