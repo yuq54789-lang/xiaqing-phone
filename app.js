@@ -4900,30 +4900,68 @@ async function partCountsLocal() {
   }
   return o;
 }
-async function buildExport(partIds, withKey) {
-  var out = { format: 'myphone-v1', exportedAt: Date.now(), source: 'myphone', parts: partIds.slice() };
-  var sel = partIds.map(partOf).filter(Boolean), sObj = null;
+/* 边读库边写文件：用游标一批一批取，每攒够约 4MB 就封成一段 Blob，内存里不会同时放着整个备份。
+ * 总结/心声进度（lastSummaryTs / lastThoughtTs）随角色原样导出，分区导入时才不会回到起点。 */
+async function exportBlob(partIds, withKey, onStep) {
+  var sel = partIds.map(partOf).filter(Boolean), sObj = null, local = null, files = null;
+  var blobs = [], cur = [], curLen = 0, counts = {};
+  function flush() { if (cur.length) { blobs.push(new Blob(cur)); cur = []; curLen = 0; } }
+  function push(s) { cur.push(s); curLen += s.length; if (curLen > 4000000) flush(); }
+  push('{"format":"myphone-v1","exportedAt":' + Date.now() + ',"source":"myphone","parts":' + JSON.stringify(partIds));
   for (var i = 0; i < sel.length; i++) {
     var p = sel[i];
     if (p.secret && !withKey) continue;
-    for (var j = 0; j < p.stores.length; j++) out[p.stores[j]] = await dbAll(p.stores[j]);
+    for (var j = 0; j < p.stores.length; j++) {
+      var s = p.stores[j];
+      if (onStep) onStep(p.name);
+      push(',"' + s + '":[');
+      counts[s] = await new Promise(function (res, rej) {
+        var n = 0, req = db.transaction(s).objectStore(s).openCursor();
+        req.onsuccess = function () {
+          try {
+            var c = req.result;
+            if (!c) { res(n); return; }
+            push((n ? ',' : '') + JSON.stringify(c.value)); n++; c.continue();
+          } catch (e) { rej(e); }
+        };
+        req.onerror = function () { rej(req.error); };
+      });
+      push(']');
+    }
     var keys = p.settings || (p.settingsRest ? restSettingKeys(settings) : null);
-    if (keys) { sObj = sObj || {}; keys.forEach(function (k) { if (settings[k] !== undefined) sObj[k] = JSON.parse(JSON.stringify(settings[k])); }); }
-    if (p.local) { p.local.forEach(function (k) { try { var v = localStorage.getItem(k); if (v) { out.local = out.local || {}; out.local[k] = v; } } catch (e) {} }); }   /* localStorage 里的 TTS 地址/密钥也带上，换包不用重新填 */
-    if (p.files) { out.files = out.files || {}; p.files.forEach(function (k) { var v = k === 'homeBgFile' ? homeBgFile : notifyFile; if (v) out.files[k] = v; }); }
+    if (keys) { sObj = sObj || {}; keys.forEach(function (k) { if (settings[k] !== undefined) sObj[k] = settings[k]; }); }
+    if (p.local) { p.local.forEach(function (k) { try { var v = localStorage.getItem(k); if (v) { local = local || {}; local[k] = v; } } catch (e) {} }); }   /* localStorage 里的 TTS 地址/密钥也带上，换包不用重新填 */
+    if (p.files) { files = files || {}; p.files.forEach(function (k) { var v = k === 'homeBgFile' ? homeBgFile : notifyFile; if (v) files[k] = v; }); }
   }
-  if (out.characters) out.characters.forEach(function (c) { delete c.lastSummaryTs; delete c.lastThoughtTs; });
-  if (sObj) out.settings = sObj;
-  return out;
+  if (local) push(',"local":' + JSON.stringify(local));
+  if (files) push(',"files":' + JSON.stringify(files));
+  if (sObj) push(',"settings":' + JSON.stringify(sObj));
+  push('}'); flush();
+  return { blob: new Blob(blobs, { type: 'application/json' }), counts: counts };
 }
 function stamp() { var d = new Date(); function z(n) { return (n < 10 ? '0' : '') + n; } return d.getFullYear() + z(d.getMonth() + 1) + z(d.getDate()) + '-' + z(d.getHours()) + z(d.getMinutes()); }
+/* 每个分区一行「名称：N 项」，导出/导入完成后给你核对数量用 */
+function countsText(counts) {
+  var lines = [];
+  PARTS.forEach(function (p) {
+    if (!p.stores.length) return;
+    var n = 0, has = false;
+    p.stores.forEach(function (s) { if (counts[s] != null) { has = true; n += counts[s]; } });
+    if (has && n > 0) lines.push(p.name + '：' + n + ' 项');
+  });
+  return lines.join('\n');
+}
+function showReport(title, text) {
+  openSheet([h('h3', { text: title }), h('div', { class: 'hint', style: 'white-space:pre-wrap;line-height:1.7', text: text }),
+    h('div', { class: 'btn-row' }, h('button', { class: 'btn primary', text: '好', onclick: closeSheet }))]);
+}
 async function doExportParts(partIds, label, withKey) {
   toast('正在导出…');
   try {
-    var out = await buildExport(partIds, withKey), blob = new Blob([JSON.stringify(out)], { type: 'application/json' });
-    downloadBlob('myphone-' + label + '-' + stamp() + '.json', blob);
+    var r = await exportBlob(partIds, withKey, function (n) { toast('正在导出：' + n); });
+    downloadBlob('myphone-' + label + '-' + stamp() + '.json', r.blob);
     try { localStorage.setItem('mp-last-export', String(Date.now())); } catch (e) {}
-    toast('已导出 ' + (blob.size / 1048576).toFixed(1) + 'MB'); refreshBackupPage();
+    showReport('已导出 ' + (r.blob.size / 1048576).toFixed(1) + 'MB', countsText(r.counts) || '只有设置，没有数据表。'); refreshBackupPage();
   } catch (e) { toast('导出失败：' + e.message); }
 }
 
@@ -5049,8 +5087,11 @@ async function applyImport(data, partIds, replaceMode) {
       var s = p.stores[j]; if (!Array.isArray(data[s])) continue;
       if (replaceMode) await dbClear(s);
       if (s === 'characters') {
-        var lastBy = {}, rollPtr = {}; (data.memories || []).forEach(function (m) { if (m.roll && m.ptr) rollPtr[m.characterId] = Math.max(rollPtr[m.characterId] || 0, m.ptr); else if (m.kind !== 'note' && m.kind !== 'profile' && !m.core) lastBy[m.characterId] = Math.max(lastBy[m.characterId] || 0, m.to || m.ts || 0); });
-        var lastTh = {}; (data.thoughts || []).forEach(function (t) { lastTh[t.characterId] = Math.max(lastTh[t.characterId] || 0, t.ts || 0); });
+        /* 文件里没有记忆/心声（分区导入或旧备份）时，用数据库里现有的来推算书签 */
+        var memSrc = Array.isArray(data.memories) ? data.memories : await dbAll('memories');
+        var thSrc = Array.isArray(data.thoughts) ? data.thoughts : await dbAll('thoughts');
+        var lastBy = {}, rollPtr = {}; memSrc.forEach(function (m) { if (m.roll && m.ptr) rollPtr[m.characterId] = Math.max(rollPtr[m.characterId] || 0, m.ptr); else if (m.kind !== 'note' && m.kind !== 'profile' && !m.core) lastBy[m.characterId] = Math.max(lastBy[m.characterId] || 0, m.to || m.ts || 0); });
+        var lastTh = {}; thSrc.forEach(function (t) { lastTh[t.characterId] = Math.max(lastTh[t.characterId] || 0, t.ts || 0); });
         data[s].forEach(function (c) { if (c.lastSummaryTs == null) c.lastSummaryTs = rollPtr[c.id] || lastBy[c.id] || 0; if (c.lastThoughtTs == null) c.lastThoughtTs = lastTh[c.id] || 0; });
       }
       var arr = data[s];
@@ -5067,7 +5108,268 @@ async function applyImport(data, partIds, replaceMode) {
   if (patch) { Object.assign(settings, patch); await saveSettings(); }
   chars = await dbAll('characters'); applyTheme(); try { await renderHome(); } catch (e) {} renderList();
 }
+/* ---------- 流式读取备份：一次只在内存里放一小块，一条记录一条记录交给回调 ----------
+ * 备份文件最外层是 { "key": 值, ... }。值是数组（各数据表）就逐条交出，其它值（设置等）整个交出。
+ * cb.arrayStart(key) / cb.item(key, 原始文本) / cb.value(key, 原始文本)，回调可以是 async。 */
+async function streamBackup(file, cb, onProgress, chunkSize) {
+  var CH = chunkSize || 4 * 1024 * 1024, dec = new TextDecoder('utf-8'), off = 0, text = '', p = 0;
+  var TRUNC = '文件不完整（可能没下载完，或中途被截断）';
+  async function fill() {
+    if (off >= file.size) return false;
+    var buf = await file.slice(off, off + CH).arrayBuffer();
+    off += buf.byteLength;
+    text += dec.decode(buf, { stream: off < file.size });
+    if (onProgress) onProgress(off / file.size);
+    return true;
+  }
+  function compact() { if (p > 1048576) { text = text.slice(p); p = 0; } }
+  async function skipWs() {
+    for (;;) {
+      while (p < text.length) { var c = text.charCodeAt(p); if (c === 32 || c === 10 || c === 13 || c === 9 || c === 0xFEFF) p++; else return true; }
+      text = ''; p = 0;
+      if (!(await fill())) return false;
+    }
+  }
+  /* 从 p 开始找出一个完整 JSON 值的结尾（不含），数据不够就继续读；字符串里的括号、引号、转义都会正确跳过 */
+  async function valueEnd() {
+    var i = p, depth = 0, inStr = false, c = text.charCodeAt(i);
+    if (c === 34) { inStr = true; i++; }
+    else if (c === 91 || c === 123) { depth = 1; i++; }
+    else {   /* 数字 / true / false / null：读到分隔符为止 */
+      for (;;) {
+        while (i < text.length) { c = text.charCodeAt(i); if (c === 44 || c === 93 || c === 125 || c === 32 || c === 10 || c === 13 || c === 9) return i; i++; }
+        if (!(await fill())) return i;
+      }
+    }
+    for (;;) {
+      if (inStr) {
+        var q = text.indexOf('"', i);
+        if (q < 0) { i = text.length; if (!(await fill())) throw new Error(TRUNC); continue; }
+        var b = q - 1, n = 0; while (b >= p && text.charCodeAt(b) === 92) { n++; b--; }   /* 引号前连续反斜杠是奇数个 → 这个引号被转义了 */
+        i = q + 1;
+        if (n % 2 === 0) { inStr = false; if (depth === 0) return i; }
+        continue;
+      }
+      var hit = false;
+      while (i < text.length) {
+        c = text.charCodeAt(i);
+        if (c === 34) { inStr = true; i++; hit = true; break; }
+        if (c === 91 || c === 123) depth++;
+        else if (c === 93 || c === 125) { depth--; if (depth === 0) return i + 1; }
+        i++;
+      }
+      if (!hit && !(await fill())) throw new Error(TRUNC);
+    }
+  }
+  if (!(await skipWs())) throw new Error('文件是空的');
+  if (text.charCodeAt(p) !== 123) throw new Error('不是备份文件（最外层不是 { }）');
+  p++;
+  for (;;) {
+    if (!(await skipWs())) throw new Error(TRUNC);
+    var c = text.charCodeAt(p);
+    if (c === 44) { p++; continue; }
+    if (c === 125) break;
+    if (c !== 34) throw new Error('文件格式不对');
+    var ke = await valueEnd(), key = JSON.parse(text.slice(p, ke)); p = ke;
+    if (!(await skipWs())) throw new Error(TRUNC);
+    if (text.charCodeAt(p) !== 58) throw new Error('文件格式不对');
+    p++;
+    if (!(await skipWs())) throw new Error(TRUNC);
+    if (text.charCodeAt(p) === 91) {
+      p++;
+      if (cb.arrayStart) await cb.arrayStart(key);
+      for (;;) {
+        if (!(await skipWs())) throw new Error(TRUNC);
+        c = text.charCodeAt(p);
+        if (c === 44) { p++; continue; }
+        if (c === 93) { p++; break; }
+        var ie = await valueEnd(), raw = text.slice(p, ie); p = ie;
+        if (cb.item) await cb.item(key, raw);
+        compact();
+      }
+    } else {
+      var ve = await valueEnd(), vraw = text.slice(p, ve); p = ve;
+      if (cb.value) await cb.value(key, vraw);
+      compact();
+    }
+  }
+}
+
+/* 第一遍：只数数、看有哪些内容，不解析记录、不写库；顺便确认文件是完整的 */
+async function scanBackup(file, onProgress, chunkSize) {
+  var sum = { format: null, counts: {}, settingsKeys: [], fileKeys: [], localKeys: [] };
+  await streamBackup(file, {
+    value: function (key, raw) {
+      if (key === 'format') { try { sum.format = JSON.parse(raw); } catch (e) {} }
+      else if (key === 'settings' || key === 'files' || key === 'local') {
+        var o; try { o = JSON.parse(raw); } catch (e) { throw new Error('「' + key + '」部分损坏'); }
+        var ks = o && typeof o === 'object' ? Object.keys(o) : [];
+        if (key === 'settings') sum.settingsKeys = ks; else if (key === 'files') sum.fileKeys = ks; else sum.localKeys = ks;
+      }
+    },
+    arrayStart: function (key) { if (sum.counts[key] == null) sum.counts[key] = 0; },
+    item: function (key) { sum.counts[key]++; }
+  }, onProgress, chunkSize);
+  return sum;
+}
+function isPartSettingKey(k) { return PARTS.some(function (p) { return (p.settings || []).indexOf(k) >= 0; }); }
+function partsInSummary(sum) {
+  var res = [];
+  PARTS.forEach(function (p) {
+    var n = 0, has = false, sk = sum.settingsKeys;
+    p.stores.forEach(function (s) { if (sum.counts[s] != null) { has = true; n += sum.counts[s]; } });
+    var keys = p.settings || (p.settingsRest && sk.length ? sk.filter(function (k) { return !isPartSettingKey(k); }) : null);
+    if (keys && sk.length) { var hit = keys.filter(function (k) { return sk.indexOf(k) >= 0; }).length; if (hit) { has = true; if (!p.stores.length) n = hit; } }
+    if (p.files && sum.fileKeys.some(function (k) { return p.files.indexOf(k) >= 0; })) has = true;
+    if (p.local && p.local.some(function (k) { return sum.localKeys.indexOf(k) >= 0; })) has = true;
+    if (has && (n > 0 || p.settings || p.files || p.local)) res.push({ part: p, n: n });
+  });
+  return res;
+}
+
+function dbDelMany(store, keys) {
+  dbDirty = true;
+  return new Promise(function (res, rej) {
+    if (!keys || !keys.length) return res();
+    var tx = db.transaction(store, 'readwrite'), os = tx.objectStore(store);
+    for (var i = 0; i < keys.length; i++) os.delete(keys[i]);
+    tx.oncomplete = res; tx.onerror = function () { rej(tx.error); }; tx.onabort = function () { rej(tx.error); };
+  });
+}
+/* 总结 / 心声进度缺失（旧备份）时，用库里现有的记忆和心声推算 */
+async function inferPointers(need) {
+  var mem = await dbAll('memories'), th = await dbAll('thoughts'), lastBy = {}, rollPtr = {}, lastTh = {};
+  mem.forEach(function (m) { if (m.roll && m.ptr) rollPtr[m.characterId] = Math.max(rollPtr[m.characterId] || 0, m.ptr); else if (m.kind !== 'note' && m.kind !== 'profile' && !m.core) lastBy[m.characterId] = Math.max(lastBy[m.characterId] || 0, m.to || m.ts || 0); });
+  th.forEach(function (t) { lastTh[t.characterId] = Math.max(lastTh[t.characterId] || 0, t.ts || 0); });
+  for (var i = 0; i < need.length; i++) {
+    var n = need[i], c = await dbGet('characters', n.id); if (!c) continue;
+    var ch = false;
+    if (n.sum && c.lastSummaryTs == null) { c.lastSummaryTs = rollPtr[c.id] || lastBy[c.id] || 0; ch = true; }
+    if (n.th && c.lastThoughtTs == null) { c.lastThoughtTs = lastTh[c.id] || 0; ch = true; }
+    if (ch) await dbPut('characters', c);
+  }
+}
+/* 心声表没有主键：按「角色+时间+内容」去重，重复导入不会越导越多 */
+async function mergeThoughts(list, replaceMode) {
+  var sig = function (t) { return t.characterId + '|' + t.ts + '|' + (t.heartfeltVoice || ''); };
+  var ex = await dbAllWithKeys('thoughts'), have = {}, incoming = {};
+  list.forEach(function (t) { incoming[sig(t)] = 1; });
+  ex.forEach(function (e) { have[sig(e.value)] = 1; });
+  var add = list.filter(function (t) { var k = sig(t); if (k in have) return false; have[k] = 1; return true; });
+  await dbBulkPut('thoughts', add);
+  if (replaceMode) { var del = ex.filter(function (e) { return !incoming[sig(e.value)]; }).map(function (e) { return e.key; }); await dbDelMany('thoughts', del); }
+}
+
+/* 第二遍：边读边写。
+ * 覆盖模式「先写入、全部成功后才删」——中途不管哪一步出错，旧数据都还在。
+ * 记录按数据量分批写入（约 6MB 一批），不会因为一批带图的记录太大而卡住。 */
+async function applyImportStream(file, partIds, replaceMode, onProgress, chunkSize) {
+  var sel = partIds.map(partOf).filter(Boolean), wantStore = {}, present = {}, seen = {}, wrote = {}, pend = {}, pendBytes = {};
+  var needPtr = [], thoughtsIn = [], patch = null, warns = [];
+  sel.forEach(function (p) { p.stores.forEach(function (s) { wantStore[s] = true; }); });
+  var explicit = {}, restSel = sel.some(function (p) { return p.settingsRest; }), wantFiles = sel.some(function (p) { return p.files; });
+  sel.forEach(function (p) { (p.settings || []).forEach(function (k) { explicit[k] = true; }); });
+  function allowed(k) { return explicit[k] || (restSel && !isPartSettingKey(k)); }
+  async function flush(s) { var a = pend[s]; if (a && a.length) { pend[s] = []; pendBytes[s] = 0; await dbBulkPut(s, a); } }
+
+  await streamBackup(file, {
+    arrayStart: function (key) { if (wantStore[key]) present[key] = true; },
+    item: async function (key, raw) {
+      if (!wantStore[key]) return;
+      var o = JSON.parse(raw);
+      wrote[key] = (wrote[key] || 0) + 1;
+      if (key === 'thoughts') { thoughtsIn.push(o); return; }
+      if (key === 'characters' && (o.lastSummaryTs == null || o.lastThoughtTs == null)) needPtr.push({ id: o.id, sum: o.lastSummaryTs == null, th: o.lastThoughtTs == null });
+      (seen[key] = seen[key] || new Set()).add(String(o[STORES[key].keyPath]));
+      (pend[key] = pend[key] || []).push(o); pendBytes[key] = (pendBytes[key] || 0) + raw.length;
+      if (pendBytes[key] > 6000000 || pend[key].length >= 2000) await flush(key);
+    },
+    value: async function (key, raw) {
+      if (key === 'settings') {
+        var so = JSON.parse(raw); patch = patch || {};
+        Object.keys(so).forEach(function (k) { if (allowed(k) && so[k] !== undefined) patch[k] = so[k]; });
+      } else if (key === 'local') {
+        var lo = JSON.parse(raw);
+        sel.forEach(function (p) { if (p.local) p.local.forEach(function (k) { if (lo[k] != null) { try { localStorage.setItem(k, String(lo[k])); } catch (e) {} } }); });
+      } else if (key === 'files' && wantFiles) {
+        var fo = JSON.parse(raw);
+        if (fo.homeBgFile != null) { homeBgFile = fo.homeBgFile; await dbPut('settings', { key: 'homeBgFile', data: homeBgFile }); }
+        if (fo.notifyFile != null) { notifyFile = fo.notifyFile; await dbPut('settings', { key: 'notifyFile', data: notifyFile }); }
+      }
+    }
+  }, onProgress, chunkSize);
+
+  var stores = Object.keys(pend);
+  for (var a = 0; a < stores.length; a++) await flush(stores[a]);
+  if (present.thoughts) await mergeThoughts(thoughtsIn, replaceMode);
+  if (needPtr.length) await inferPointers(needPtr);
+  /* 到这里所有写入都成功了，才开始删备份里没有的旧记录（覆盖模式） */
+  if (replaceMode) {
+    var ps = Object.keys(present);
+    for (var b = 0; b < ps.length; b++) {
+      var s = ps[b]; if (s === 'thoughts') continue;
+      var keys = await reqP(db.transaction(s).objectStore(s).getAllKeys()), sn = seen[s] || new Set();
+      var del = keys.filter(function (k) { return !sn.has(String(k)); });
+      for (var d = 0; d < del.length; d += 2000) await dbDelMany(s, del.slice(d, d + 2000));
+      var left = await reqP(db.transaction(s).objectStore(s).count());
+      if (left !== sn.size) warns.push(s + '：文件里 ' + (wrote[s] || 0) + ' 条，库里现在 ' + left + ' 条（有重复编号被合并）');
+    }
+  }
+  if (patch && Object.keys(patch).length) { Object.assign(settings, patch); await saveSettings(); }
+  return { wrote: wrote, warns: warns };
+}
+async function afterImportRefresh() { chars = await dbAll('characters'); applyTheme(); try { await renderHome(); } catch (e) {} renderList(); }
+
+/* 导入弹层：勾选分区 + 覆盖/合并；runner(ids, replaceMode) 负责真正导入 */
+function showImportSheet(avail, note, runner) {
+  var checks = {}, list = h('div', { class: 'imp-list' });
+  avail.forEach(function (a) {
+    var cb = h('input', { type: 'checkbox' }); cb.checked = true;
+    checks[a.part.id] = cb;
+    list.appendChild(h('label', { class: 'imp-row' }, cb, h('span', { class: 'imp-n', text: a.part.name }), h('span', { class: 'imp-c', text: a.part.stores.length ? a.n + ' 项' : '设置' })));
+  });
+  var modeSel = h('select', {}, h('option', { value: 'replace', text: '覆盖：以备份为准（推荐，恢复备份用）' }), h('option', { value: 'merge', text: '合并：保留现有，同 ID 的被覆盖' }));
+  openSheet([h('h3', { text: '选择要导入的分区' }), h('div', { class: 'hint', text: note }), list, field('导入方式', modeSel),
+    h('div', { class: 'btn-row' },
+      h('button', { class: 'btn primary', text: '开始导入', onclick: async function () {
+        var ids = avail.filter(function (a) { return checks[a.part.id].checked; }).map(function (a) { return a.part.id; });
+        if (!ids.length) { toast('至少勾一项'); return; }
+        var replaceMode = modeSel.value === 'replace'; closeSheet();
+        await runner(ids, replaceMode);
+      } }),
+      h('button', { class: 'btn', text: '取消', onclick: closeSheet }))]);
+}
+function importReportText(ids, r) {
+  var t = countsText(r.wrote), only = ids.map(partOf).filter(function (p) { return p && !p.stores.length; }).map(function (p) { return p.name; });
+  if (only.length) t += (t ? '\n' : '') + only.join('、') + '：已导入设置';
+  if (r.warns.length) t += '\n\n请注意：\n' + r.warns.join('\n');
+  return t || '完成';
+}
+
 async function loadImportFile(f, onlyParts) {
+  var head = '';
+  try { head = new TextDecoder().decode(await f.slice(0, 4096).arrayBuffer()); } catch (e) {}
+  if (/"format"\s*:\s*"myphone-v1"/.test(head)) return loadImportStream(f, onlyParts);
+  return loadImportLegacy(f, onlyParts);
+}
+/* 本小手机导出的 myphone-v1：流式读取，大文件也不会把内存撑爆 */
+async function loadImportStream(f, onlyParts) {
+  var sum;
+  try { toast('正在检查文件…'); sum = await scanBackup(f, function (x) { toast('正在检查文件… ' + Math.round(x * 100) + '%'); }); }
+  catch (e) { showReport('这个文件有问题', e.message + '\n\n你现有的数据没有被改动。'); return; }
+  var avail = partsInSummary(sum); if (onlyParts) avail = avail.filter(function (a) { return onlyParts.indexOf(a.part.id) >= 0; });
+  if (!avail.length) { toast('文件里没有可导入的内容'); return; }
+  showImportSheet(avail, '识别为 myphone-v1 备份，文件完整。大文件会一条一条读取，不会占满内存。覆盖模式：导入全部成功后，才会删掉备份里没有的旧记录，中途出错旧数据不会丢。', async function (ids, replaceMode) {
+    toast('导入中，请稍候…');
+    try {
+      var r = await applyImportStream(f, ids, replaceMode, function (x) { toast('导入中… ' + Math.round(x * 100) + '%'); });
+      await afterImportRefresh(); markDirty2(); refreshBackupPage();
+      showReport('导入完成', importReportText(ids, r));
+    } catch (e) { showReport('导入没有完成', e.message + '\n\n已经写入的部分会保留，你原来的记录没有被删除。重新导入一次就行。'); }
+  });
+}
+/* EPhone 旧备份等其它格式：需要整份读进内存转换（这类文件通常不大） */
+async function loadImportLegacy(f, onlyParts) {
   var data;
   try { toast('正在读取文件…'); data = JSON.parse((await f.text()).replace(/^﻿/, '')); }
   catch (e) { toast('文件不是有效的 JSON（或太大，手机内存不够）'); return; }
@@ -5078,27 +5380,14 @@ async function loadImportFile(f, onlyParts) {
   }
   var avail = partsInData(data); if (onlyParts) avail = avail.filter(function (a) { return onlyParts.indexOf(a.part.id) >= 0; });
   if (!avail.length) { toast('文件里没有可导入的内容'); return; }
-  var checks = {}, replaceMode = true;
-  var list = h('div', { class: 'imp-list' });
-  avail.forEach(function (a) {
-    var cb = h('input', { type: 'checkbox' }); cb.checked = !(a.part.id === 'api' && det.kind === 'myphone' && false);
-    checks[a.part.id] = cb;
-    list.appendChild(h('label', { class: 'imp-row' }, cb, h('span', { class: 'imp-n', text: a.part.name }), h('span', { class: 'imp-c', text: a.part.stores.length ? a.n + ' 项' : '设置' })));
-  });
-  var modeSel = h('select', {}, h('option', { value: 'replace', text: '覆盖：先清空对应分区再导入（推荐，恢复备份用）' }), h('option', { value: 'merge', text: '合并：保留现有，同 ID 的被覆盖' }));
   var note = det.kind === 'ephone' ? '识别为 EPhone 旧小手机备份，已自动转换。' + (rep && rep.groups ? ' 已跳过群聊 ' + rep.groups + ' 个。' : '') + (rep && rep.skipped.length ? ' 这个小手机里没有对应位置的内容未导入：' + rep.skipped.join('、') + '。' : '') : '识别为 myphone-v1 备份。';
-  openSheet([h('h3', { text: '选择要导入的分区' }), h('div', { class: 'hint', text: note }), list, field('导入方式', modeSel),
-    h('div', { class: 'btn-row' },
-      h('button', { class: 'btn primary', text: '开始导入', onclick: async function () {
-        var ids = avail.filter(function (a) { return checks[a.part.id].checked; }).map(function (a) { return a.part.id; });
-        if (!ids.length) { toast('至少勾一项'); return; }
-        replaceMode = modeSel.value === 'replace'; closeSheet();
-        toast('导入中，请稍候…');
-        try { await applyImport(data, ids, replaceMode); iosAlert('导入完成', ids.map(function (i) { return partOf(i).name; }).join('、')); markDirty2(); refreshBackupPage(); }
-        catch (e) { toast('导入失败：' + e.message); }
-      } }),
-      h('button', { class: 'btn', text: '取消', onclick: closeSheet }))]);
+  showImportSheet(avail, note, async function (ids, replaceMode) {
+    toast('导入中，请稍候…');
+    try { await applyImport(data, ids, replaceMode); iosAlert('导入完成', ids.map(function (i) { return partOf(i).name; }).join('、')); markDirty2(); refreshBackupPage(); }
+    catch (e) { toast('导入失败：' + e.message); }
+  });
 }
+
 var importOnly = null;
 function startImport(onlyParts) { importOnly = onlyParts || null; $('file-import').click(); }
 $('file-import').addEventListener('change', function () { var f = this.files[0]; this.value = ''; if (f) loadImportFile(f, importOnly); });
@@ -5114,20 +5403,19 @@ async function emergencyBackup(force) {
   if (!force && (!emgEnabled() || !dbDirty)) return false;
   emgBusy = true;
   try {
-    var all = PARTS.map(function (p) { return p.id; }), out = await buildExport(all, true);
-    var n = { chars: (out.characters || []).length, msgs: (out.messages || []).length };
+    var all = PARTS.map(function (p) { return p.id; }), r = await exportBlob(all, true), blob = r.blob;
+    var n = { chars: r.counts.characters || 0, msgs: r.counts.messages || 0 };
     if (!force && !n.chars && !n.msgs) return false;                  /* 空库不覆盖已有的应急备份 */
-    var blob = new Blob([JSON.stringify(out)], { type: 'application/json' });
     var meta = emgMeta() || {}, slot = meta.slot === 'a' ? 'b' : 'a', cache = await caches.open(EMG_CACHE);
     await cache.put('/__emg/' + slot + '.json', new Response(blob));  /* 交替写两份：写到一半断了，上一份仍完好 */
     localStorage.setItem(EMG_META, JSON.stringify({ slot: slot, ts: Date.now(), size: blob.size, chars: n.chars, msgs: n.msgs }));
     dbDirty = false; return true;
   } catch (e) { return false; } finally { emgBusy = false; }
 }
-async function emergencyRead() {
+async function emergencyBlob() {
   var m = emgMeta(); if (!m || !('caches' in window)) return null;
   var cache = await caches.open(EMG_CACHE), r = await cache.match('/__emg/' + m.slot + '.json'); if (!r) return null;
-  return await r.json();
+  return await r.blob();
 }
 document.addEventListener('visibilitychange', function () { if (document.hidden) emergencyBackup(false); });
 window.addEventListener('pagehide', function () { emergencyBackup(false); });
@@ -5145,10 +5433,13 @@ async function checkEmergencyRestore() {
   } catch (e) {}
 }
 async function restoreEmergency() {
-  var data = await emergencyRead(); if (!data) { toast('没找到应急备份'); return; }
+  var blob = await emergencyBlob(); if (!blob) { toast('没找到应急备份'); return; }
   toast('正在恢复…');
-  try { await applyImport(data, PARTS.map(function (p) { return p.id; }), true); iosAlert('已恢复', (data.characters || []).length + ' 个角色 · ' + (data.messages || []).length + ' 条消息'); refreshBackupPage(); }
-  catch (e) { toast('恢复失败：' + e.message); }
+  try {
+    var r = await applyImportStream(blob, PARTS.map(function (p) { return p.id; }), true, function (x) { toast('正在恢复… ' + Math.round(x * 100) + '%'); });
+    await afterImportRefresh(); markDirty2();
+    showReport('已恢复', (r.wrote.characters || 0) + ' 个角色 · ' + (r.wrote.messages || 0) + ' 条消息' + (r.warns.length ? '\n\n' + r.warns.join('\n') : '')); refreshBackupPage();
+  } catch (e) { toast('恢复失败：' + e.message); }
 }
 
 /* ---------- 数据备份全屏页 ---------- */
@@ -5185,7 +5476,7 @@ async function renderBackupPage() {
   emgBox.appendChild(h('div', { class: 'btn-row' },
     h('button', { class: 'btn', text: '立即备份一次', onclick: async function () { toast('备份中…'); var ok = await emergencyBackup(true); toast(ok ? '已备份' : '备份失败（浏览器不支持或空间不足）'); renderBackupPage(); } }),
     h('button', { class: 'btn', text: '从应急备份恢复', onclick: function () { if (!m) { toast('还没有应急备份'); return; } confirmSheet('用应急备份覆盖现在的全部数据？', '恢复', restoreEmergency, true); } }),
-    h('button', { class: 'btn', text: '下载应急备份文件', onclick: async function () { var d = await emergencyRead(); if (!d) { toast('没有应急备份'); return; } downloadBlob('myphone-emergency-' + stamp() + '.json', new Blob([JSON.stringify(d)], { type: 'application/json' })); } })));
+    h('button', { class: 'btn', text: '下载应急备份文件', onclick: async function () { var b = await emergencyBlob(); if (!b) { toast('没有应急备份'); return; } downloadBlob('myphone-emergency-' + stamp() + '.json', b); } })));
   emgBox.appendChild(h('div', { class: 'bt-hint', text: '原理：每次你切走/关闭网页（以及每隔约 10 分钟）且数据有变化时，自动把全部数据存一份到浏览器的缓存仓库，交替写两份，写坏一份还有上一份。下次打开如果发现数据库是空的，会提示一键恢复。\n限制：这份备份和网页数据在同一个浏览器里，如果你手动「清除网站数据」或卸载浏览器，它也会一起没。所以请隔一阵导出一份备份文件，存到手机文件/网盘里。' }));
   body.appendChild(emgBox);
 }
