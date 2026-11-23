@@ -4904,7 +4904,7 @@ async function partCountsLocal() {
  * 总结/心声进度（lastSummaryTs / lastThoughtTs）随角色原样导出，分区导入时才不会回到起点。 */
 async function exportBlob(partIds, withKey, onStep) {
   var sel = partIds.map(partOf).filter(Boolean), sObj = null, local = null, files = null;
-  var blobs = [], cur = [], curLen = 0, counts = {};
+  var blobs = [], cur = [], curLen = 0, counts = {}, settingCounts = {};   /* settingCounts：没有数据表的分区（API 设置等）实际导出了几项设置 */
   function flush() { if (cur.length) { blobs.push(new Blob(cur)); cur = []; curLen = 0; } }
   function push(s) { cur.push(s); curLen += s.length; if (curLen > 4000000) flush(); }
   push('{"format":"myphone-v1","exportedAt":' + Date.now() + ',"source":"myphone","parts":' + JSON.stringify(partIds));
@@ -4929,15 +4929,17 @@ async function exportBlob(partIds, withKey, onStep) {
       push(']');
     }
     var keys = p.settings || (p.settingsRest ? restSettingKeys(settings) : null);
-    if (keys) { sObj = sObj || {}; keys.forEach(function (k) { if (settings[k] !== undefined) sObj[k] = settings[k]; }); }
-    if (p.local) { p.local.forEach(function (k) { try { var v = localStorage.getItem(k); if (v) { local = local || {}; local[k] = v; } } catch (e) {} }); }   /* localStorage 里的 TTS 地址/密钥也带上，换包不用重新填 */
-    if (p.files) { files = files || {}; p.files.forEach(function (k) { var v = k === 'homeBgFile' ? homeBgFile : notifyFile; if (v) files[k] = v; }); }
+    var nSet = 0;
+    if (keys) { sObj = sObj || {}; keys.forEach(function (k) { if (settings[k] !== undefined) { sObj[k] = settings[k]; nSet++; } }); }
+    if (p.local) { p.local.forEach(function (k) { try { var v = localStorage.getItem(k); if (v) { local = local || {}; local[k] = v; nSet++; } } catch (e) {} }); }   /* localStorage 里的 TTS 地址/密钥也带上，换包不用重新填 */
+    if (p.files) { files = files || {}; p.files.forEach(function (k) { var v = k === 'homeBgFile' ? homeBgFile : notifyFile; if (v) { files[k] = v; nSet++; } }); }
+    if (!p.stores.length) settingCounts[p.id] = nSet;
   }
   if (local) push(',"local":' + JSON.stringify(local));
   if (files) push(',"files":' + JSON.stringify(files));
   if (sObj) push(',"settings":' + JSON.stringify(sObj));
   push('}'); flush();
-  return { blob: new Blob(blobs, { type: 'application/json' }), counts: counts };
+  return { blob: new Blob(blobs, { type: 'application/json' }), counts: counts, settingCounts: settingCounts };
 }
 function stamp() { var d = new Date(); function z(n) { return (n < 10 ? '0' : '') + n; } return d.getFullYear() + z(d.getMonth() + 1) + z(d.getDate()) + '-' + z(d.getHours()) + z(d.getMinutes()); }
 /* 每个分区一行「名称：N 项」，导出/导入完成后给你核对数量用 */
@@ -4961,7 +4963,14 @@ async function doExportParts(partIds, label, withKey) {
     var r = await exportBlob(partIds, withKey, function (n) { toast('正在导出：' + n); });
     downloadBlob('myphone-' + label + '-' + stamp() + '.json', r.blob);
     try { localStorage.setItem('mp-last-export', String(Date.now())); } catch (e) {}
-    showReport('已导出 ' + (r.blob.size / 1048576).toFixed(1) + 'MB', countsText(r.counts) || '只有设置，没有数据表。'); refreshBackupPage();
+    /* 没有数据表的分区（API 设置、其它设置）单独列出：导出了几项设置；选了「不含 API Key」时明确写出没导 */
+    var extra = [];
+    partIds.map(partOf).filter(function (p) { return p && !p.stores.length; }).forEach(function (p) {
+      if (p.secret && !withKey) extra.push(p.name + '：未导出（你选的是「不含 API Key」）');
+      else extra.push(p.name + '：' + (r.settingCounts[p.id] ? r.settingCounts[p.id] + ' 项设置' : '没有可导出的设置（可能还没填写）'));
+    });
+    if (label === 'full-nokey') extra.unshift('API 设置：未导出（你点的是「不含 API Key」）');
+    showReport('已导出 ' + (r.blob.size / 1048576).toFixed(1) + 'MB', [countsText(r.counts)].concat(extra).filter(Boolean).join('\n')); refreshBackupPage();
   } catch (e) { toast('导出失败：' + e.message); }
 }
 
