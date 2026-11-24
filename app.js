@@ -315,7 +315,7 @@ function buildDepth(ctx) {
   if (ctx.periodText) L.push(ctx.periodText);
   if (!off && ctx.stickers && ctx.stickers.length) L.push('可发送的表情包（想发就单独一行写 [表情包：名称]，名称只能从这里选，不要自己编）：' + ctx.stickers.map(function (st) { return st.name; }).join('、'));
   var tail = off ? '先回应用户最新的一条消息，再按写作要求展开。'
-    : '格式提醒：每条消息单独一行，最多 20 条；先回应用户最新的一条消息，再说别的；引用某句话写 [引用：原话片段]你的回复；' + (c.aiVoice ? '语音单独一行写 [语音：说的话]（每次最多 1 条）；' : '') + '表情包写 [表情包：名称]；直接输出纯文本，特殊内容用标签，不要用 JSON，不要输出任何英文思考或说明。';
+    : '格式提醒：每条消息单独一行，最多 60 条；先回应用户最新的一条消息，再说别的；引用某句话写 [引用：原话片段]你的回复；' + (c.aiVoice ? '语音单独一行写 [语音：说的话]（每次最多 1 条）；' : '') + '表情包写 [表情包：名称]；直接输出纯文本，特殊内容用标签，不要用 JSON，不要输出任何英文思考或说明。';
   if (!L.length) return tail;
   return '【背景资料——只有你知道，不是聊天内容。除非和用户正在聊的话题有关，否则不要提起，更不要复述这些提示。】\n' + L.join('\n\n') + '\n\n' + tail;
 }
@@ -3326,7 +3326,7 @@ $('b-chatmenu').onclick = function () {
 };
 $('fab').addEventListener('click', function (e) { if (e.target === this) closeFab(); });
 async function regenerate() {
-  var tail = await pageMessages(cur.id, null, 30), del = [];
+  var tail = await pageMessages(cur.id, null, 70), del = [];
   for (var i = tail.length - 1; i >= 0; i--) {
     if (tail[i].role === 'assistant' && !tail[i].hidden) del.push(tail[i]); else break;
   }
@@ -4687,9 +4687,33 @@ function normalizeWbJson(data, defName) {
     }) };
   }).filter(function (b) { return b.entries.length; });
 }
-function downloadBlob(name, blob) {
+function blobToBase64(b) {
+  return new Promise(function (res, rej) {
+    var rd = new FileReader();
+    rd.onload = function () { res(String(rd.result).split(',')[1] || ''); };
+    rd.onerror = function () { rej(rd.error || new Error('读取失败')); };
+    rd.readAsDataURL(b);
+  });
+}
+async function downloadBlob(name, blob) {
+  if (window.PhoneNative && typeof window.PhoneNative.beginSave === 'function') {
+    var id = window.PhoneNative.beginSave(name, blob.type || 'application/octet-stream');
+    if (!id) throw new Error('无法创建本地文件');
+    var CHUNK = 512 * 1024;
+    try {
+      for (var off = 0; off < blob.size; off += CHUNK) {
+        var b64 = await blobToBase64(blob.slice(off, off + CHUNK));
+        if (!window.PhoneNative.writeChunk(id, b64)) throw new Error('写入文件失败');
+      }
+      if (!window.PhoneNative.finishSave(id)) throw new Error('完成保存失败');
+      return;
+    } catch (e) {
+      try { window.PhoneNative.abortSave(id); } catch (e2) {}
+      throw e;
+    }
+  }
   var a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name;
-  document.body.appendChild(a); a.click(); a.remove(); setTimeout(function () { URL.revokeObjectURL(a.href); }, 5000);
+  document.body.appendChild(a); a.click(); a.remove(); setTimeout(function () { URL.revokeObjectURL(a.href); }, 60000);
 }
 async function importWorldBooks() {
   var f = h('input', { type: 'file', accept: '.json,.txt,.docx,.md,text/plain,application/json' });
@@ -5027,7 +5051,7 @@ async function doExportParts(partIds, label, withKey) {
   toast('正在导出…');
   try {
     var r = await exportBlob(partIds, withKey, function (n) { toast('正在导出：' + n); });
-    downloadBlob('myphone-' + label + '-' + stamp() + '.json', r.blob);
+    await downloadBlob('myphone-' + label + '-' + stamp() + '.json', r.blob);
     try { localStorage.setItem('mp-last-export', String(Date.now())); } catch (e) {}
     /* 没有数据表的分区（API 设置、其它设置）单独列出：导出了几项设置；选了「不含 API Key」时明确写出没导 */
     var extra = [];
@@ -5551,7 +5575,7 @@ async function renderBackupPage() {
   emgBox.appendChild(h('div', { class: 'btn-row' },
     h('button', { class: 'btn', text: '立即备份一次', onclick: async function () { toast('备份中…'); var ok = await emergencyBackup(true); toast(ok ? '已备份' : '备份失败（浏览器不支持或空间不足）'); renderBackupPage(); } }),
     h('button', { class: 'btn', text: '从应急备份恢复', onclick: function () { if (!m) { toast('还没有应急备份'); return; } confirmSheet('用应急备份覆盖现在的全部数据？', '恢复', restoreEmergency, true); } }),
-    h('button', { class: 'btn', text: '下载应急备份文件', onclick: async function () { var b = await emergencyBlob(); if (!b) { toast('没有应急备份'); return; } downloadBlob('myphone-emergency-' + stamp() + '.json', b); } })));
+    h('button', { class: 'btn', text: '下载应急备份文件', onclick: async function () { var b = await emergencyBlob(); if (!b) { toast('没有应急备份'); return; } try { await downloadBlob('myphone-emergency-' + stamp() + '.json', b); } catch (e) { toast('下载失败：' + e.message); } } })));
   emgBox.appendChild(h('div', { class: 'bt-hint', text: '原理：每次你切走/关闭网页（以及每隔约 10 分钟）且数据有变化时，自动把全部数据存一份到浏览器的缓存仓库，交替写两份，写坏一份还有上一份。下次打开如果发现数据库是空的，会提示一键恢复。\n限制：这份备份和网页数据在同一个浏览器里，如果你手动「清除网站数据」或卸载浏览器，它也会一起没。所以请隔一阵导出一份备份文件，存到手机文件/网盘里。' }));
   body.appendChild(emgBox);
 }
