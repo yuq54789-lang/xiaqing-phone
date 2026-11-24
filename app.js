@@ -92,7 +92,7 @@ function countMessagesAfter(cid, ts) {
 var TTS_TAGS = ['笑', '轻笑', '咯咯笑', '叹气', '惊呼', '吸气', '呼气', '喘息', '耳语', '唱歌', '哼歌', '结巴', '停顿', '哭声', '抽泣', '呜咽', '呻吟', '清嗓', '咳嗽', '吸鼻子', '咂嘴', '啧嘴', '打哈欠', '打喷嚏', '打嗝', '吞咽', '闷哼', '冷笑', '哼鼻子'];
 /* 语音条里显示的文字：去掉所有半角/全角方括号及里面的声音标签（传给 TTS 的仍保留标签） */
 function stripVoiceTags(t) { return String(t || '').replace(/[\[［][^\]］]+[\]］]/g, '').replace(/\s{2,}/g, ' ').trim(); }
-var OUTPUT_RULES = '像真人在手机上聊天一样回复：口语化、简短自然。\n把回复拆成多条短消息，每条消息单独一行（最多 20 条）。\n想引用用户最近说过的话，写 [引用：原话片段]你的回复。\n【输出格式】直接输出纯文本聊天内容：不要 JSON，不要 Markdown 代码围栏。特殊内容一律用标签，标签不属于聊天正文：\n- 表情包：单独一行 [表情包：名称]\n- 语音（仅在后文允许发语音时）：单独一行 [语音：说的话]\n- 状态（可选，放在回复最末尾另起一行）：<状态>类型｜短描述</状态>，类型只能是 在线、忙碌、离开、睡觉 之一，短描述不超过 16 字，例如 <状态>在线｜在想你</状态>\n- 心声、朋友圈、拍一拍、转账、一起听歌的标签，按后文对应章节的说明写（没有对应章节就不要写）。\n不要在开头写角色名字，不要写旁白、括号动作或解释，除非角色设定要求这样。每次开口根据当前话题和心情自然起头，不要重复近期开头词。始终保持角色设定，不要承认自己是 AI。不输出思考过程或英文说明。';
+var OUTPUT_RULES = '像真人在手机上聊天一样回复：口语化、简短自然。\n把回复拆成多条短消息，每条消息单独一行（最多 60 条）。\n想引用用户最近说过的话，写 [引用：原话片段]你的回复。\n【输出格式】直接输出纯文本聊天内容：不要 JSON，不要 Markdown 代码围栏。特殊内容一律用标签，标签不属于聊天正文：\n- 表情包：单独一行 [表情包：名称]\n- 语音（仅在后文允许发语音时）：单独一行 [语音：说的话]\n- 状态（可选，放在回复最末尾另起一行）：<状态>类型｜短描述</状态>，类型只能是 在线、忙碌、离开、睡觉 之一，短描述不超过 16 字，例如 <状态>在线｜在想你</状态>\n- 心声、朋友圈、拍一拍、转账、一起听歌的标签，按后文对应章节的说明写（没有对应章节就不要写）。\n不要在开头写角色名字，不要写旁白、括号动作或解释，除非角色设定要求这样。每次开口根据当前话题和心情自然起头，不要重复近期开头词。始终保持角色设定，不要承认自己是 AI。不输出思考过程或英文说明。';
 var OFFLINE_RULES = '现在是线下场景，你和用户面对面相处。用小说式的叙述回复：用第三人称写角色的动作、神态、环境，对白用「」括起来，连贯地写成一段或几段文字。篇幅 {{MIN}} 到 {{MAX}} 字，一次写完，不要拆成多条消息，不要发表情包，不要用你的名字做开头。只写角色自己的言行和感受，不要替用户说话、替用户做动作。始终保持角色设定，不要承认自己是 AI。\n【输出格式】直接输出叙述正文纯文本，不要 JSON，不要代码围栏。需要时可在正文末尾另起一行加 <状态>…</状态>、<心声>…</心声>、<朋友圈>…</朋友圈> 标签（写法见后文对应章节），标签不属于正文。';
 /* 线下模式的完整规则 = 内置规则（字数按角色设置填） + 你选的预设（文风/格式要求） */
 function offlineRules(c, preset) {
@@ -3224,14 +3224,14 @@ if (fresh || !r || !r.active) r = rounds[char.id] = { active: true, won: false, 
     var st = extractStatus(mo.reply);
     var ex = extractThought(st.reply), replyText = ex.reply;   /* 心声同理 */
     if (settings.autoStripFormat !== false) replyText = stripExtraFormat(replyText);
-    var items = char.offlineMode ? (replyText.trim() ? [{ type: 'offline', content: replyText.trim() }] : []) : parseReplyLines(splitReply(jsonReplyToLines(replyText) || replyText, 20), prompt.pool, !char.offlineMode), base = Date.now(), saved = [];
+    var items = char.offlineMode ? (replyText.trim() ? [{ type: 'offline', content: replyText.trim() }] : []) : parseReplyLines(splitReply(jsonReplyToLines(replyText) || replyText, 60), prompt.pool, !char.offlineMode), base = Date.now(), saved = [];
     if (!items.length && !ac.acts.length) {
       /* 过滤完什么都没剩：不再报错（请求已经成功、额度已经花了）。把模型原话去掉标签外壳后直接发进聊天，不对就自己删 */
       if (dict.texts.length) toast('模型这次只写了语音的文字，没有写回复，可以重新生成一次');   /* 只有听写：发出来会变成 AI 复述你的话，所以不发气泡 */
       else {
         var rawTxt = String(text || ''), fb = rawTxt.replace(/<\/?(?:听写|状态|心声|朋友圈)[^>]*>/g, '').trim() || rawTxt.trim();
         if (!fb) throw new Error('模型返回了空内容');
-        items = char.offlineMode ? [{ type: 'offline', content: fb }] : splitReply(fb, 20).map(function (s) { return { type: 'text', content: s }; });
+        items = char.offlineMode ? [{ type: 'offline', content: fb }] : splitReply(fb, 60).map(function (s) { return { type: 'text', content: s }; });
       }
     }
     r.won = true;
