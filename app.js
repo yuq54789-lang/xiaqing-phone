@@ -1904,6 +1904,22 @@ async function freeTranslate(text, from, to) {
   }
   throw lastErr || new Error('翻译失败');
 }
+/* 中英混写（如「还funny」「You feel funny? … 乖 以后天天陪你练口语」）：翻成中文时只把英文片段单独拿去翻，中文原样保留。
+   整句丢给翻译接口时，自动识别常把混写句判成中文，译文和原文一样，就被当成「不用翻」悄悄吞掉了。 */
+async function trMixed(text, cfg) {
+  var src = String(text);
+  var okDir = trScript(cfg.to) === 'zh' && (!cfg.from || cfg.from === 'auto' || trScript(cfg.from) === 'latin');
+  if (!okDir || !/[一-鿿]/.test(src) || !/[A-Za-z]{2,}/.test(src)) return freeTranslate(src, cfg.from, cfg.to);
+  var parts = src.split(/([A-Za-z][A-Za-z0-9 ,.'’!?;:"“”\-]*)/), out = '';
+  for (var i = 0; i < parts.length; i++) {
+    var p = parts[i];
+    if (i % 2 === 1 && /[A-Za-z]{2,}/.test(p)) {
+      var tail = p.match(/\s*$/)[0];
+      out += (await freeTranslate(p.trim(), 'en', cfg.to)) + tail;
+    } else out += p;
+  }
+  return out;
+}
 var trChain = Promise.resolve();
 function queueTranslate(m, host, foot, cfg) {
   trChain = trChain.then(function () { return translateMsg(m, host, foot, cfg); }).then(function () { return sleep(120); });
@@ -1911,10 +1927,10 @@ function queueTranslate(m, host, foot, cfg) {
 function trSame(a, b) { var n = function (x) { return String(x || '').replace(/[\s\u3000，。,.!！?？、…~～"“”'‘’《》「」『』（）()\-—:：;；]/g, '').toLowerCase(); }; return n(a) === n(b); }
 async function translateMsg(m, host, foot, cfg, el) {
   try {
-    var res = await freeTranslate(m.content, cfg.from, cfg.to);
-    if (trSame(res, m.content)) {   /* 译文和原文一样（比如中英混写的中文）：不显示，也记下来别再翻 */
+    var res = await trMixed(m.content, cfg);
+    if (trSame(res, m.content)) {   /* 译文和原文一样：不显示，也记下来别再翻（v:2 以后的记录才算数，旧版本误记的会重新翻一次） */
       if (el) el.remove();
-      try { var f0 = await dbGet('messages', m.id); if (f0 && f0.content === m.content) { f0.meta = f0.meta || {}; f0.meta.tr = { to: cfg.to, src: m.content, text: res, same: true }; await dbPut('messages', f0); m.meta = f0.meta; } } catch (e0) {}
+      try { var f0 = await dbGet('messages', m.id); if (f0 && f0.content === m.content) { f0.meta = f0.meta || {}; f0.meta.tr = { to: cfg.to, src: m.content, text: res, same: true, v: 2 }; await dbPut('messages', f0); m.meta = f0.meta; } } catch (e0) {}
       return;
     }
     if (!el) { el = h('div', { class: 'trans' }); host.insertBefore(el, foot && foot.parentNode === host ? foot : null); }
@@ -1933,6 +1949,7 @@ function addTrans(m, b, foot) {
   var cfg = cur && cur.translate; if (!cfg || !cfg.on || m.role !== 'assistant') return;
   var t = m.type || 'text'; if (!(t === 'text' || t === 'offline' || (t === 'voice' && m.content)) || !m.content) return;
   var tr = m.meta && m.meta.tr;
+  if (tr && tr.same && tr.v !== 2) tr = null;   /* 旧版本把「没翻出来」永久记成了「不用翻」，这里作废重翻 */
   if (tr && tr.to === cfg.to && tr.src === m.content) { if (tr.same || trSame(tr.text, m.content)) return; b.insertBefore(h('div', { class: 'trans', text: tr.text }), foot || null); return; }
   if (!needTranslate(m.content, cfg)) return;
   queueTranslate(m, b, foot, cfg);
