@@ -296,7 +296,7 @@ function buildSystem(ctx) {
   if (ctx.momentsText) L.push(ctx.momentsText + '\n\n# 朋友圈互动规则\n' + MOMENT_RULES);
   if (ctx.changes) L.push('# 消息的变动\n用户有时会撤回、删除或编辑消息。方括号里的「[用户撤回了一条消息。撤回前的内容：…]」「[用户删除了…]」和消息后面的「（…原文是…）」就是你看到的变动，你确实知道原来写了什么。像真人一样自然地反应（好奇、调侃、装作没看见都行，看角色性格），不要机械复述这些提示，也不要每次都点破。');
   if (c.aiVoice && !c.offlineMode) L.push('# 发语音\n想发语音消息时，把那一条单独写成一行：[语音：说的话]。方括号里就是语音里说的原话（口语、带语气词），会自动显示成文字，不用再重复。偶尔用，适合轻声说话、撒娇、叹气、情绪起伏的时候；每次回复最多 1 条（多发会被语音接口限流）。\n语音文字里要自然穿插声音表情标签，必须从下面的词表里原样选用，严禁自造：' + TTS_TAGS.map(function (x) { return '[' + x + ']'; }).join('、') + '。\n示例：[语音：[轻笑]你怎么才回我呀，[叹气]我等了好久。]');
-  if (ctx.dictate) L.push('# 听写（必须）\n用户发来的 ' + ctx.dictate + ' 条语音还没有文字。请在回复的最最开头，按语音出现的顺序，每条语音写一段 <听写>用户语音里说的原话</听写>（逐字写，不翻译、不润色；完全听不清就写 听不清）。写完标签再正常回复；标签里的字不要在正文里重复，标签本身用户看不到。');
+  if (ctx.dictate) L.push('# 听写（必须）\n用户发来的 ' + ctx.dictate + ' 条语音还没有文字。请在回复的最最开头，按语音出现的顺序，为每条语音各自写一对独立的 <听写>…</听写> 标签（一共必须有 ' + ctx.dictate + ' 对标签，每条语音独占一对，严禁把多条语音合并写进同一个 <听写> 标签里；逐字写，不翻译、不润色；完全听不清就写 听不清）。\n示例（2 条语音时）：\n<听写>第一条语音原话</听写>\n<听写>第二条语音原话</听写>\n写完全部 ' + ctx.dictate + ' 对标签后再正常回复；标签里的字不要在正文里重复，标签本身用户看不到。');
   if (ctx.voice === 'audio') L.push('# 语音消息\n用户的语音会直接以音频发给你（标着「[用户发来一条语音…]」的那条）：请真的去听——语气、情绪、语速、停顿、背景声音，再自然地回应。不要念出「语气」「音频」这类词，也不要复述括号里的提示。历史里更早的语音只剩文字。听不清就坦白说没听清。');
   else if (ctx.voice) L.push('# 语音消息\n用户发来的「[语音 N秒，语气：…] 文字」是语音消息：方括号里是时长和语气提示（根据音量、语速、停顿粗略估计的，仅供参考），后面才是说的内容。请结合语气和内容自然回应，不要把方括号里的提示原样复述。如果写着「没有转成文字」，就说你没听清，让对方再说一遍或打字。');
   return L.join('\n\n');
@@ -489,7 +489,7 @@ function fixTagLine(ln) {
 /* 剔除模型误复读出来的计时标签与系统提示，防止掉进聊天气泡 */
 var RE_INTERVAL_TAG = /(?:[\[【［(（]\s*间隔\s*[:：]?\s*[^\]】］)）\r\n]+[\]】］)）]?)[ \t]*/g;
 var RE_INTERVAL_TAIL = /(?:[\[【［(（]\s*间隔\s*[:：]?\s*[^\]】］)）\r\n]{0,20})$/;
-var RE_SYS_LEAK = /(?:[\[【［]\s*(?:系统提示|用户撤回了一条消息|用户删除了|用户发来(?:一条语音|一张图片)|用户发送了一张图片)[^\]】］\r\n]*[\]】］]?)[ \t]*/g;
+var RE_SYS_LEAK = /(?:[\[【［]\s*(?:系统提示|用户撤回了一条消息|用户删除了|用户发来(?:(?:一|第\s*\d+\s*)条语音|一张图片)|用户发送了一张图片)[^\]】］\r\n]*[\]】］]?)[ \t]*/g;
 var RE_EDIT_LEAK = /[（(]\s*(?:这句是你之前说的，被用户改成了现在这样|用户事后编辑过这条消息)[^）)\r\n]*[）)]/g;
 
 function stripSystemLeaks(ln) {
@@ -549,9 +549,9 @@ function msgToTextBase(m) {
 }
 
 /* 历史 -> API 消息：system 当作 user 提示，连续同角色的合并成一条 */
-function addAudio(item, mime, b64, secs) {
+function addAudio(item, mime, b64, secs, idx) {
   if (typeof item.content === 'string') item.content = item.content ? [{ type: 'text', text: item.content }] : [];
-  item.content.push({ type: 'text', text: '[用户发来一条语音，时长 ' + secs + ' 秒]' }, { type: 'audio_data', mime: mime, data: b64 });
+  item.content.push({ type: 'text', text: '[用户发来第 ' + (idx || 1) + ' 条语音，时长 ' + secs + ' 秒]' }, { type: 'audio_data', mime: mime, data: b64 });
 }
 function imgUsable(u) { return /^data:image\//.test(u || ''); }
 function addText(item, text) {
@@ -569,7 +569,7 @@ function toApiMessages(history, opt) {
   opt = opt || {};
   var lastA = -1;
   history.forEach(function (m, i) { if (m.role === 'assistant' && !m.hidden && m.type !== 'pat' && m.type !== 'system') lastA = i; });
-  var out = [];
+  var out = [], audioIdx = 0;
   history.forEach(function (m, i) {
     var role = m.role === 'assistant' ? 'assistant' : 'user';
     var asImage = m.type === 'image' && role === 'user' && opt.images !== false && i > lastA && imgUsable(m.content);
@@ -582,7 +582,7 @@ function toApiMessages(history, opt) {
     }
     var last = out[out.length - 1];
     if (!last || last.role !== role) { last = { role: role, content: '' }; out.push(last); }
-    if (asImage) addImage(last, m.content); else if (asAudio) addAudio(last, 'audio/wav', wav, (m.meta && m.meta.duration) || 1); else addText(last, text);
+    if (asImage) addImage(last, m.content); else if (asAudio) addAudio(last, 'audio/wav', wav, (m.meta && m.meta.duration) || 1, ++audioIdx); else addText(last, text);
   });
   return out;
 }
@@ -1827,31 +1827,43 @@ function settleLast(img, b) {
 /* ---------- 自动翻译（不走你的 AI 接口；用浏览器自带翻译 / 免费公共翻译接口） ---------- */
 var TR_LANGS = [['zh-CN', '中文'], ['en', 'English'], ['ja', '日本語'], ['ko', '한국어'], ['fr', 'Français'], ['es', 'Español'], ['de', 'Deutsch'], ['ru', 'Русский'], ['pt', 'Português'], ['it', 'Italiano'], ['vi', 'Tiếng Việt'], ['id', 'Bahasa Indonesia'], ['th', 'ไทย'], ['ar', 'العربية']];
 function trScript(code) { return { 'zh-CN': 'zh', ja: 'ja', ko: 'ko', ru: 'ru', ar: 'ar', th: 'th' }[code] || 'latin'; }
-function detectScript(text) {
-  var t = String(text).replace(/https?:\/\/\S+/g, ' '), c = { zh: 0, kana: 0, ko: 0, ru: 0, ar: 0, th: 0, latin: 0 };
+var RE_LATIN_WORD = /[A-Za-z\u00C0-\u024F\u1E00-\u1EFF]{2,}/;
+function scriptCounts(text) {
+  var t = String(text || '').replace(/https?:\/\/\S+/g, ' '), c = { zh: 0, kana: 0, ko: 0, ru: 0, ar: 0, th: 0, latin: 0, hasLatinWord: RE_LATIN_WORD.test(t) };
   for (var i = 0; i < t.length; i++) {
     var x = t.charCodeAt(i);
     if (x >= 0x4E00 && x <= 0x9FFF) c.zh++;
     else if ((x >= 0x3040 && x <= 0x30FF) || (x >= 0x31F0 && x <= 0x31FF)) c.kana++;
-    else if ((x >= 0xAC00 && x <= 0xD7AF) || (x >= 0x1100 && x <= 0x11FF)) c.ko++;
+    else if ((x >= 0xAC00 && x <= 0xD7AF) || (x >= 0x1100 && x <= 0x11FF) || (x >= 0x3130 && x <= 0x318F)) c.ko++;
     else if (x >= 0x400 && x <= 0x4FF) c.ru++;
     else if (x >= 0x600 && x <= 0x6FF) c.ar++;
     else if (x >= 0xE00 && x <= 0xE7F) c.th++;
     else if ((x >= 65 && x <= 90) || (x >= 97 && x <= 122) || (x >= 0xC0 && x <= 0x24F) || (x >= 0x1E00 && x <= 0x1EFF)) c.latin++;
   }
+  return c;
+}
+function detectScript(text) {
+  var t = String(text || '').replace(/https?:\/\/\S+/g, ' '), c = scriptCounts(t);
   if (c.kana > 0 && c.kana + c.zh > c.latin * 0.5) return 'ja';
   var best = '', n = 0; ['zh', 'ko', 'ru', 'ar', 'th', 'latin'].forEach(function (k) { if (c[k] > n) { n = c[k]; best = k; } });
   return n >= 2 || (n >= 1 && t.trim().length <= 6) ? best : '';
 }
+function hasScript(c, sc) {
+  if (sc === 'ja') return c.kana > 0 || c.zh > 0;
+  if (sc === 'latin') return c.hasLatinWord;
+  return (c[sc] || 0) > 0;
+}
 function needTranslate(text, cfg) {
-  var sc = detectScript(text); if (!sc) return false;
-  var toSc = trScript(cfg.to);
+  var c = scriptCounts(text), toSc = trScript(cfg.to);
   if (cfg.from && cfg.from !== 'auto') {
     if (cfg.from === cfg.to) return false;
-    var fromSc = trScript(cfg.from);
-    return sc === fromSc && (sc !== toSc || cfg.from !== cfg.to);
+    return hasScript(c, trScript(cfg.from));
   }
-  return sc !== toSc;
+  /* 自动识别：只要句子里包含任何与目标语言不同文字体系的内容（哪怕只混了 1 个外语词或 1 句中文），都放行翻译 */
+  if (toSc === 'zh') return c.kana > 0 || c.ko > 0 || c.ru > 0 || c.ar > 0 || c.th > 0 || c.hasLatinWord;
+  if (toSc === 'ja') return (c.zh > 0 && c.kana === 0) || c.ko > 0 || c.ru > 0 || c.ar > 0 || c.th > 0 || c.hasLatinWord;
+  if (toSc === 'latin') return c.zh > 0 || c.kana > 0 || c.ko > 0 || c.ru > 0 || c.ar > 0 || c.th > 0;
+  return c.zh > 0 || c.kana > 0 || c.hasLatinWord || ['ko', 'ru', 'ar', 'th'].some(function (k) { return k !== toSc && c[k] > 0; });
 }
 var trProvider = 0, trCache = {}, trMade = {}, trBrowserBad = false;
 function trFetch(url, ms) {
@@ -1904,39 +1916,61 @@ async function freeTranslate(text, from, to) {
   }
   throw lastErr || new Error('翻译失败');
 }
-/* 中英混写（如「还funny」「You feel funny? … 乖 以后天天陪你练口语」）：翻成中文时只把英文片段单独拿去翻，中文原样保留。
-   整句丢给翻译接口时，自动识别常把混写句判成中文，译文和原文一样，就被当成「不用翻」悄悄吞掉了。 */
+/* 多语混写翻译：
+ * ① 翻成中文且句中混有中文 + 外语（不含假名）时：把每段外语（英/法/德/西/越等拉丁语系、韩、俄、阿、泰）单独拆出来翻成中文，中文原样保留；
+ *    如果含日文假名（日语大量共用汉字），整句交给日语→中文翻译更自然。
+ * ② 翻成其它语言（如中文/混写 → 英/日/韩/法…）时：如果句中含中文且不含假名，强制用 zh-CN 作为源语言整句翻译，避免混入外语后被误判成目标语言而跳过。 */
+var RE_FOREIGN_SEG = /([A-Za-z\u00C0-\u024F\u1E00-\u1EFF][A-Za-z\u00C0-\u024F\u1E00-\u1EFF0-9 ,.'’!?;:"“”\-]*|[\uAC00-\uD7AF\u1100-\u11FF\u3130-\u318F][\uAC00-\uD7AF\u1100-\u11FF\u3130-\u318F0-9 ,.!?~\-]*|[\u0400-\u04FF][\u0400-\u04FF0-9 ,.!?\-]*|[\u0600-\u06FF][\u0600-\u06FF0-9 ,.!?،؟\-]*|[\u0E00-\u0E7F][\u0E00-\u0E7F0-9 ,.!?\-]*)/;
 async function trMixed(text, cfg) {
-  var src = String(text);
-  var okDir = trScript(cfg.to) === 'zh' && (!cfg.from || cfg.from === 'auto' || trScript(cfg.from) === 'latin');
-  if (!okDir || !/[一-鿿]/.test(src) || !/[A-Za-z]{2,}/.test(src)) return freeTranslate(src, cfg.from, cfg.to);
-  var parts = src.split(/([A-Za-z][A-Za-z0-9 ,.'’!?;:"“”\-]*)/), out = '';
-  for (var i = 0; i < parts.length; i++) {
-    var p = parts[i];
-    if (i % 2 === 1 && /[A-Za-z]{2,}/.test(p)) {
-      var tail = p.match(/\s*$/)[0];
-      out += (await freeTranslate(p.trim(), 'en', cfg.to)) + tail;
-    } else out += p;
+  var src = String(text || ''), c = scriptCounts(src), toSc = trScript(cfg.to);
+  if (toSc === 'zh') {
+    if (c.kana > 0) return freeTranslate(src, (cfg.from && cfg.from !== 'auto') ? cfg.from : 'ja', cfg.to);
+    var hasForeign = c.hasLatinWord || c.ko > 0 || c.ru > 0 || c.ar > 0 || c.th > 0;
+    if (c.zh > 0 && hasForeign) {
+      var parts = src.split(RE_FOREIGN_SEG), out = '';
+      for (var i = 0; i < parts.length; i++) {
+        var p = parts[i];
+        if (i % 2 === 1 && p) {
+          var pc = scriptCounts(p), tail = (p.match(/\s*$/) || [''])[0], body = p.trim();
+          var segFrom = null;
+          if (pc.ko > 0) segFrom = 'ko';
+          else if (pc.ru > 0) segFrom = 'ru';
+          else if (pc.ar > 0) segFrom = 'ar';
+          else if (pc.th > 0) segFrom = 'th';
+          else if (pc.hasLatinWord) segFrom = (cfg.from && cfg.from !== 'auto' && trScript(cfg.from) === 'latin') ? cfg.from : 'auto';
+          if (segFrom && body) out += (await freeTranslate(body, segFrom, cfg.to)) + tail;
+          else out += p;
+        } else out += p;
+      }
+      return out;
+    }
+    return freeTranslate(src, cfg.from, cfg.to);
   }
-  return out;
+  var fromLang = cfg.from;
+  if ((!fromLang || fromLang === 'auto') && c.zh > 0 && c.kana === 0) fromLang = 'zh-CN';
+  return freeTranslate(src, fromLang, cfg.to);
 }
 var trChain = Promise.resolve();
 function queueTranslate(m, host, foot, cfg) {
   trChain = trChain.then(function () { return translateMsg(m, host, foot, cfg); }).then(function () { return sleep(120); });
 }
 function trSame(a, b) { var n = function (x) { return String(x || '').replace(/[\s\u3000，。,.!！?？、…~～"“”'‘’《》「」『』（）()\-—:：;；]/g, '').toLowerCase(); }; return n(a) === n(b); }
+function trSourceText(m) {
+  return (m && m.type === 'voice' && m.role === 'assistant') ? stripVoiceTags(m.content) : String((m && m.content) || '');
+}
 async function translateMsg(m, host, foot, cfg, el) {
+  var src = trSourceText(m);
   try {
-    var res = await trMixed(m.content, cfg);
-    if (trSame(res, m.content)) {   /* 译文和原文一样：不显示，也记下来别再翻（v:2 以后的记录才算数，旧版本误记的会重新翻一次） */
+    var res = await trMixed(src, cfg);
+    if (trSame(res, src)) {   /* 译文和原文一样：不显示，也记下来别再翻（v:3 以后的记录才算数，旧版本误记的会重新翻一次） */
       if (el) el.remove();
-      try { var f0 = await dbGet('messages', m.id); if (f0 && f0.content === m.content) { f0.meta = f0.meta || {}; f0.meta.tr = { to: cfg.to, src: m.content, text: res, same: true, v: 2 }; await dbPut('messages', f0); m.meta = f0.meta; } } catch (e0) {}
+      try { var f0 = await dbGet('messages', m.id); if (f0 && f0.content === m.content) { f0.meta = f0.meta || {}; f0.meta.tr = { to: cfg.to, src: src, text: res, same: true, v: 3 }; await dbPut('messages', f0); m.meta = f0.meta; } } catch (e0) {}
       return;
     }
     if (!el) { el = h('div', { class: 'trans' }); host.insertBefore(el, foot && foot.parentNode === host ? foot : null); }
     el.className = 'trans'; el.textContent = res; el.onclick = null;
     var fresh = await dbGet('messages', m.id);
-    if (fresh && fresh.content === m.content) { fresh.meta = fresh.meta || {}; fresh.meta.tr = { to: cfg.to, src: m.content, text: res }; await dbPut('messages', fresh); m.meta = fresh.meta; }
+    if (fresh && fresh.content === m.content) { fresh.meta = fresh.meta || {}; fresh.meta.tr = { to: cfg.to, src: src, text: res, v: 3 }; await dbPut('messages', fresh); m.meta = fresh.meta; }
     pinScroll();
   } catch (e) {
     if (!el) { el = h('div', { class: 'trans err' }); host.insertBefore(el, foot && foot.parentNode === host ? foot : null); }
@@ -1944,15 +1978,25 @@ async function translateMsg(m, host, foot, cfg, el) {
     el.onclick = function (ev) { ev.stopPropagation(); el.className = 'trans loading'; el.textContent = '翻译中…'; el.onclick = null; translateMsg(m, host, foot, cfg, el); };
   }
 }
+function effectiveTrCfg(m, cfg) {
+  if (!cfg || !cfg.on) return null;
+  if (m.role === 'assistant') return cfg;
+  if (m.role === 'user' && cfg.me) {
+    var meTo = (cfg.meTo && cfg.meTo !== 'same') ? cfg.meTo : cfg.to;
+    return { on: true, from: 'auto', to: meTo };
+  }
+  return null;
+}
 /* 译文放进气泡内部、时间戳上面；原文先显示，译完再追加（气泡变长），不挡原文 */
 function addTrans(m, b, foot) {
-  var cfg = cur && cur.translate; if (!cfg || !cfg.on || m.role !== 'assistant') return;
+  var ecfg = effectiveTrCfg(m, cur && cur.translate); if (!ecfg) return;
   var t = m.type || 'text'; if (!(t === 'text' || t === 'offline' || (t === 'voice' && m.content)) || !m.content) return;
+  var src = trSourceText(m); if (!src) return;
   var tr = m.meta && m.meta.tr;
-  if (tr && tr.same && tr.v !== 2) tr = null;   /* 旧版本把「没翻出来」永久记成了「不用翻」，这里作废重翻 */
-  if (tr && tr.to === cfg.to && tr.src === m.content) { if (tr.same || trSame(tr.text, m.content)) return; b.insertBefore(h('div', { class: 'trans', text: tr.text }), foot || null); return; }
-  if (!needTranslate(m.content, cfg)) return;
-  queueTranslate(m, b, foot, cfg);
+  if (tr && tr.same && tr.v !== 3) tr = null;   /* 旧版本把「没翻出来」永久记成了「不用翻」，这里作废重翻 */
+  if (tr && tr.to === ecfg.to && (tr.src === src || tr.src === m.content)) { if (tr.same || trSame(tr.text, src)) return; b.insertBefore(h('div', { class: 'trans', text: tr.text }), foot || null); return; }
+  if (!needTranslate(src, ecfg)) return;
+  queueTranslate(m, b, foot, ecfg);
 }
 
 function msgNode(m) {
@@ -4087,20 +4131,25 @@ onShow['s-chatset'] = function () {
         cur.chatBg = u; await saveCur(); applyChatLook(); onShow['s-chatset']();
       } })),
     h('div', { class: 'hint', style: 'margin-top:6px', text: '原图不压缩，画质不会变差；图很大（超过约 8MB）会占不少存储。网址方式几乎不占存储，但图床失效背景就没了。' })));
-  /* 自动翻译：译文显示在对方每条消息的气泡下面一行；走免费翻译，不消耗你的 AI 请求 */
-  var tcfg = cur.translate || { on: false, from: 'auto', to: 'zh-CN' };
-  function langSel(withAuto, val, on) {
-    var sel = h('select', {}); if (withAuto) sel.appendChild(h('option', { value: 'auto', text: '自动识别' }));
+  /* 自动翻译：译文显示在消息气泡下面一行；走免费翻译，不消耗你的 AI 请求 */
+  var tcfg = Object.assign({ on: false, from: 'auto', to: 'zh-CN', me: false, meTo: 'same' }, cur.translate || {});
+  function langSel(extra, val, on) {
+    var sel = h('select', {}); if (extra) sel.appendChild(h('option', { value: extra[0], text: extra[1] }));
     TR_LANGS.forEach(function (l) { sel.appendChild(h('option', { value: l[0], text: l[1] })); });
     sel.value = val; sel.onchange = function () { on(sel.value); }; return sel;
   }
   async function saveTr() { cur.translate = tcfg; await saveCur(); reloadChat(); }
   var trSw = switchEl(tcfg.on, function (v) { tcfg.on = v; saveTr(); });
+  var meToField = field('我发的消息翻译成', langSel(['same', '跟随上面（同向翻译）'], tcfg.meTo || 'same', function (v) { tcfg.meTo = v; saveTr(); }));
+  meToField.hidden = !tcfg.me;
+  var meSw = switchEl(!!tcfg.me, function (v) { tcfg.me = v; meToField.hidden = !v; saveTr(); });
   body.appendChild(h('div', { class: 'glass' }, h('h4', { text: '自动翻译（不走你的 AI 请求）' }),
     h('div', { class: 'field inline' }, h('label', { text: '开启' }), trSw.el),
-    field('对方说的语言', langSel(true, tcfg.from || 'auto', function (v) { tcfg.from = v; saveTr(); })),
-    field('翻译成', langSel(false, tcfg.to || 'zh-CN', function (v) { tcfg.to = v; saveTr(); })),
-    h('div', { class: 'bt-hint', text: '例：对方说「English」→ 翻译成「中文」：对方发英文时，气泡下面多一行中文；发中文就不翻。反过来选「中文 → English」，对方发中文时下面显示英文。用浏览器自带翻译 / Google / MyMemory 三个免费来源，哪个能用就用哪个；译文存在本地，不会重复请求。' })));
+    field('对方说的语言', langSel(['auto', '自动识别'], tcfg.from || 'auto', function (v) { tcfg.from = v; saveTr(); })),
+    field('对方消息翻译成', langSel(null, tcfg.to || 'zh-CN', function (v) { tcfg.to = v; saveTr(); })),
+    h('div', { class: 'field inline' }, h('label', { text: '同时翻译我发的消息' }), meSw.el),
+    meToField,
+    h('div', { class: 'bt-hint', text: '开启「同时翻译我发的消息」后：选「跟随上面」= 同向翻译（你发的外语或混写也翻成同一种语言）；单独选另一种语言（如对方译成中文、自己译成 English）= 双向翻译。用浏览器自带翻译 / Google / MyMemory 免费翻译；译文存在本地，不会重复请求。' })));
   var fsv = h('span', { class: 'val', text: (cur.chatFontSize || 15) + 'px' });
   var fr = h('input', { type: 'range', min: '12', max: '22', step: '1', value: String(cur.chatFontSize || 15) });
   fr.addEventListener('input', function () { fsv.textContent = fr.value + 'px'; });
