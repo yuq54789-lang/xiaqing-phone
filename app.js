@@ -2030,13 +2030,21 @@ function msgNode(m) {
     b.appendChild(h('div', { class: 'vrow' }, pb, h('span', { class: 'vbar' }, h('i'), h('i'), h('i'), h('i'), h('i'), h('i'), h('i'), h('i'), h('i'), h('i')), h('span', { class: 'vdur', text: fmtDur(meta.duration) })));
     if (m.content) b.appendChild(h('div', { class: 'vtext', text: m.content }));
     else b.appendChild(h('div', { class: 'vtext vpend', text: '（AI 回复时会写出文字）' }));
+  } else if (t === 'voice' && !meta.audio && m.role === 'user') {
+    b = h('div', { class: 'bubble vmsg expired' });
+    b.appendChild(h('div', { class: 'vtext vpend', text: '[语音 ' + fmtDur(meta.duration) + ' · 音频已过期清理]' }));
+    if (m.content) b.appendChild(h('div', { class: 'vtext', text: m.content }));
   } else if (t === 'image') {
     b = h('div', { class: 'bubble image' });
-    var pic = h('img', { src: m.content, alt: '图片' });
-    settleLast(pic, b);
-    pic.onerror = function () { b.innerHTML = ''; b.appendChild(h('div', { class: 'alt', text: '[图片读取失败]' })); };
-    pic.addEventListener('click', function () { if (Date.now() - lastLP > 700 && !selMode) openLightbox(m.content); });
-    b.appendChild(pic);
+    if (!m.content || meta.omitted === 'image') {
+      b.appendChild(h('div', { class: 'alt', text: '[图片已过期清理]' }));
+    } else {
+      var pic = h('img', { src: m.content, alt: '图片' });
+      settleLast(pic, b);
+      pic.onerror = function () { b.innerHTML = ''; b.appendChild(h('div', { class: 'alt', text: '[图片读取失败]' })); };
+      pic.addEventListener('click', function () { if (Date.now() - lastLP > 700 && !selMode) openLightbox(m.content); });
+      b.appendChild(pic);
+    }
   } else if (t === 'transfer') {
     b = h('div', { class: 'bubble transfer' + (meta.status && meta.status !== 'pending' ? ' done' : ''), onclick: function () { onTransferTap(m); } }, h('b', { text: '¥ ' + (meta.amount != null ? Number(meta.amount).toFixed(2) : '') }), h('span', { text: meta.note || '转账' }), h('small', { text: transferLabel(m) }));
   } else {
@@ -2433,8 +2441,17 @@ function voiceTip() {
   setTimeout(function () { appendMsgNode(h('div', { class: 'sysline tip', text: 'AI 回复你的时候，会顺带把语音转成文字（今天只提示这一次）' })); scrollBottom(); }, 60);
 }
 var AUDIO_MIME = { m4a: 'audio/mp4', mp4: 'audio/mp4', aac: 'audio/aac', amr: 'audio/amr', '3gp': 'audio/3gpp', '3gpp': 'audio/3gpp', mp3: 'audio/mpeg', wav: 'audio/wav', ogg: 'audio/ogg', oga: 'audio/ogg', opus: 'audio/ogg', webm: 'audio/webm', flac: 'audio/flac' };
-/* 把音频解码后转成 WAV（手机系统录音机常见的 amr/3gp/m4a 等，有的 <audio> 播不了；解码成 WAV 就都能放） */
+/* 尽量保留原压缩音频（mp3/m4a/aac/ogg/webm），避免把几百 KB 录音膨胀成几 MB 的未压缩 WAV；
+ * 只有 amr/3gp 等浏览器原生播不了的罕见格式，才兜底解码成 WAV（发给 AI 听时仍会自动按需转 WAV）。 */
 async function toPlayableAudio(url) {
+  var m = /^data:(audio\/[a-z0-9.+-]+)/i.exec(url || ''), mime = m ? m[1].toLowerCase() : '';
+  if (/^audio\/(mpeg|mp3|mp4|m4a|aac|ogg|opus|webm|wav|x-wav)$/.test(mime)) {
+    try {
+      var a = new Audio();
+      if (a.canPlayType && a.canPlayType(mime)) return url;
+    } catch (e) {}
+    return url;
+  }
   try {
     var wav = await audioToWavB64(url);
     if (wav && wav.length < 5.5 * 1024 * 1024) return 'data:audio/wav;base64,' + wav;
@@ -3469,21 +3486,48 @@ function chatStats(cid) {
 }
 async function exportChatLog(c, light) {
   toast('正在导出…');
-  var all = (await pageMessages(c.id, null, 1e9)).filter(function (m) { return !m.hidden; });
-  if (light) all = all.map(function (m) {
-    if (m.type === 'image') return Object.assign({}, m, { content: '', meta: Object.assign({}, m.meta, { omitted: 'image' }) });
-    if (m.type === 'voice' && m.meta && m.meta.audio) { var mm = Object.assign({}, m.meta); delete mm.audio; mm.omitted = 'audio'; return Object.assign({}, m, { meta: mm }); }
-    return m;
-  });
-  var out = { format: 'myphone-chat-export', version: 1, exportedAt: Date.now(), character: { id: c.id, name: c.name }, count: all.filter(isRealMsg).length, messages: all };
-  downloadBlob(c.name + '-聊天记录-' + new Date().toISOString().slice(0, 10) + '.json', new Blob([JSON.stringify(out)], { type: 'application/json' }));
-  toast('已导出 ' + out.count + ' 条消息');
+  try {
+    var blobs = [], buf = [], bufLen = 0, realCount = 0, n = 0;
+    function flush() { if (buf.length) { blobs.push(new Blob(buf)); buf = []; bufLen = 0; } }
+    function push(s) { buf.push(s); bufLen += s.length; if (bufLen > 4000000) flush(); }
+    push('{"format":"myphone-chat-export","version":1,"exportedAt":' + Date.now() + ',"character":' + JSON.stringify({ id: c.id, name: c.name }) + ',"messages":[');
+    await new Promise(function (res, rej) {
+      var idx = db.transaction('messages').objectStore('messages').index('byChar');
+      var q = idx.openCursor(IDBKeyRange.bound([c.id, -Infinity, ''], [c.id, Infinity, '\uffff']));
+      q.onsuccess = function () {
+        try {
+          var cur0 = q.result;
+          if (!cur0) return res();
+          var m = cur0.value;
+          if (!m.hidden) {
+            if (isRealMsg(m)) realCount++;
+            if (light) m = stripMsgMedia(m);
+            push((n ? ',' : '') + JSON.stringify(m));
+            n++;
+          }
+          cur0.continue();
+        } catch (e) { rej(e); }
+      };
+      q.onerror = function () { rej(q.error); };
+    });
+    push('],"count":' + realCount + '}'); flush();
+    var rawBlob = new Blob(blobs, { type: 'application/json' });
+    var gz = canGzip() ? await gzipBlob(rawBlob) : { blob: rawBlob, gz: false };
+    var ext = gz.gz ? '.json.gz' : '.json';
+    await downloadBlob(c.name + '-聊天记录-' + new Date().toISOString().slice(0, 10) + ext, gz.blob);
+    toast('已导出 ' + realCount + ' 条消息（' + fmtMB(gz.blob.size) + '）');
+  } catch (e) { toast('导出失败：' + e.message); }
 }
 function importChatLog(c, done) {
-  var f = h('input', { type: 'file', accept: '.json,application/json' });
+  var f = h('input', { type: 'file', accept: '.json,.gz,application/json,application/gzip' });
   f.addEventListener('change', async function () {
     var file = f.files[0]; if (!file) return;
-    var data; try { data = JSON.parse(await file.text()); } catch (e) { toast('文件不是有效的 JSON'); return; }
+    toast('正在读取文件…');
+    var data;
+    try {
+      var rawTxt = (await isGzipFile(file)) ? await gunzipToText(file) : await file.text();
+      data = JSON.parse(rawTxt.replace(/^\uFEFF/, ''));
+    } catch (e) { toast('文件不是有效的 JSON（或解压失败）'); return; }
     var list = Array.isArray(data) ? data : (data && data.format === 'myphone-chat-export' ? data.messages : (data && data.format === 'myphone-v1' ? (data.messages || []).filter(function (m) { return m.characterId === c.id; }) : null));
     if (!list || !list.length) { toast('没找到聊天记录（需要本软件导出的聊天记录文件）'); return; }
     list = list.filter(function (m) { return m && m.role && m.ts && (m.type || m.content != null); });
@@ -3496,15 +3540,28 @@ function importChatLog(c, done) {
     async function run(replace) {
       toast('导入中…');
       try {
-        var have = {};
-        if (replace) { var olds = await pageMessages(c.id, null, 1e9); for (var oi = 0; oi < olds.length; oi++) await dbDel('messages', olds[oi].id); }
-        else (await pageMessages(c.id, null, 1e9)).forEach(function (m) { have[m.id] = true; have[m.role + '|' + m.ts + '|' + (m.content || '').slice(0, 40)] = true; });
+        var have = {}, oldIds = [];
+        await new Promise(function (res, rej) {
+          var idx = db.transaction('messages').objectStore('messages').index('byChar');
+          var q = idx.openCursor(IDBKeyRange.bound([c.id, -Infinity, ''], [c.id, Infinity, '\uffff']));
+          q.onsuccess = function () {
+            var cur0 = q.result; if (!cur0) return res();
+            var m = cur0.value;
+            if (replace) oldIds.push(m.id);
+            else { have[m.id] = true; have[m.role + '|' + m.ts + '|' + (m.content || '').slice(0, 40)] = true; }
+            cur0.continue();
+          };
+          q.onerror = function () { rej(q.error); };
+        });
+        if (replace) {
+          for (var oi = 0; oi < oldIds.length; oi += 2000) await dbDelMany('messages', oldIds.slice(oi, oi + 2000));
+        }
         var add = [];
         list.forEach(function (m) {
           var k = m.role + '|' + m.ts + '|' + (m.content || '').slice(0, 40); if (!replace && ((m.id && have[m.id]) || have[k])) return;
           var x = Object.assign({}, m, { characterId: c.id }); if (!x.id || (!replace && have[x.id])) x.id = uid(c.id); add.push(x);
         });
-        await dbBulkPut('messages', add);
+        for (var ai = 0; ai < add.length; ai += 2000) await dbBulkPut('messages', add.slice(ai, ai + 2000));
         iosAlert('导入完成', '已导入 ' + add.length + ' 条' + (list.length - add.length > 0 ? '，跳过重复 ' + (list.length - add.length) + ' 条' : ''));
         if (cur && cur.id === c.id) reloadChat();
         if (done) done();
@@ -4990,11 +5047,49 @@ async function partCountsLocal() {
   }
   return o;
 }
+/* ---------- 备份压缩 / 媒体精简工具（原生 Gzip 流，零依赖） ---------- */
+function canGzip() { return typeof CompressionStream !== 'undefined' && typeof DecompressionStream !== 'undefined'; }
+async function isGzipFile(f) {
+  try {
+    var b = new Uint8Array(await f.slice(0, 2).arrayBuffer());
+    return b.length >= 2 && b[0] === 0x1f && b[1] === 0x8b;
+  } catch (e) { return false; }
+}
+async function gzipBlob(blob) {
+  if (!canGzip()) return { blob: blob, gz: false };
+  var st = blob.stream().pipeThrough(new CompressionStream('gzip'));
+  var out = await new Response(st).blob();
+  return { blob: new Blob([out], { type: 'application/gzip' }), gz: true };
+}
+async function gunzipToText(file) {
+  if (typeof DecompressionStream === 'undefined') throw new Error('当前浏览器不支持解压 .gz 备份文件，请升级或换 Chrome');
+  var st = file.stream().pipeThrough(new DecompressionStream('gzip'));
+  return await new Response(st).text();
+}
+function stripMsgMedia(m, opt) {
+  opt = opt || { img: true, aud: true };
+  if (opt.img !== false && m.type === 'image' && m.content && /^data:/.test(m.content)) {
+    return Object.assign({}, m, { content: '', meta: Object.assign({}, m.meta, { omitted: 'image' }) });
+  }
+  if (opt.aud !== false && m.type === 'voice' && m.meta && m.meta.audio && /^data:/.test(m.meta.audio)) {
+    var mm = Object.assign({}, m.meta); delete mm.audio; mm.omitted = 'audio';
+    return Object.assign({}, m, { meta: mm });
+  }
+  return m;
+}
+function fmtMB(bytes) {
+  if (bytes < 1024 * 100) return Math.max(0.1, bytes / 1024).toFixed(0) + ' KB';
+  return (bytes / 1048576).toFixed(2) + ' MB';
+}
+
 /* 边读库边写文件：用游标一批一批取，每攒够约 4MB 就封成一段 Blob，内存里不会同时放着整个备份。
- * 总结/心声进度（lastSummaryTs / lastThoughtTs）随角色原样导出，分区导入时才不会回到起点。 */
-async function exportBlob(partIds, withKey, onStep) {
+ * opts: { mediaDays: 0=全部保留 | 15/30=仅保留近N天聊天图和语音 | -1=不打包任何聊天图和语音 } */
+async function exportBlob(partIds, withKey, onStep, opts) {
+  opts = opts || {};
+  var mediaDays = Number(opts.mediaDays) || 0;
+  var cutoff = mediaDays > 0 ? (Date.now() - mediaDays * 86400000) : (mediaDays < 0 ? Infinity : 0);
   var sel = partIds.map(partOf).filter(Boolean), sObj = null, local = null, files = null;
-  var blobs = [], cur = [], curLen = 0, counts = {}, settingCounts = {};   /* settingCounts：没有数据表的分区（API 设置等）实际导出了几项设置 */
+  var blobs = [], cur = [], curLen = 0, counts = {}, settingCounts = {}, omitted = { img: 0, aud: 0 };
   function flush() { if (cur.length) { blobs.push(new Blob(cur)); cur = []; curLen = 0; } }
   function push(s) { cur.push(s); curLen += s.length; if (curLen > 4000000) flush(); }
   push('{"format":"myphone-v1","exportedAt":' + Date.now() + ',"source":"myphone","parts":' + JSON.stringify(partIds));
@@ -5011,7 +5106,15 @@ async function exportBlob(partIds, withKey, onStep) {
           try {
             var c = req.result;
             if (!c) { res(n); return; }
-            push((n ? ',' : '') + JSON.stringify(c.value)); n++; c.continue();
+            var val = c.value;
+            if (s === 'messages' && cutoff && (val.ts || 0) < cutoff) {
+              if (val.type === 'image' && val.content && /^data:/.test(val.content)) {
+                val = stripMsgMedia(val, { img: true, aud: false }); omitted.img++;
+              } else if (val.type === 'voice' && val.meta && val.meta.audio && /^data:/.test(val.meta.audio)) {
+                val = stripMsgMedia(val, { img: false, aud: true }); omitted.aud++;
+              }
+            }
+            push((n ? ',' : '') + JSON.stringify(val)); n++; c.continue();
           } catch (e) { rej(e); }
         };
         req.onerror = function () { rej(req.error); };
@@ -5029,7 +5132,7 @@ async function exportBlob(partIds, withKey, onStep) {
   if (files) push(',"files":' + JSON.stringify(files));
   if (sObj) push(',"settings":' + JSON.stringify(sObj));
   push('}'); flush();
-  return { blob: new Blob(blobs, { type: 'application/json' }), counts: counts, settingCounts: settingCounts };
+  return { blob: new Blob(blobs, { type: 'application/json' }), counts: counts, settingCounts: settingCounts, omitted: omitted };
 }
 function stamp() { var d = new Date(); function z(n) { return (n < 10 ? '0' : '') + n; } return d.getFullYear() + z(d.getMonth() + 1) + z(d.getDate()) + '-' + z(d.getHours()) + z(d.getMinutes()); }
 /* 每个分区一行「名称：N 项」，导出/导入完成后给你核对数量用 */
@@ -5047,20 +5150,36 @@ function showReport(title, text) {
   openSheet([h('h3', { text: title }), h('div', { class: 'hint', style: 'white-space:pre-wrap;line-height:1.7', text: text }),
     h('div', { class: 'btn-row' }, h('button', { class: 'btn primary', text: '好', onclick: closeSheet }))]);
 }
-async function doExportParts(partIds, label, withKey) {
+function bkPref(k, def) { try { var v = localStorage.getItem(k); return v == null ? def : v; } catch (e) { return def; } }
+function bkSetPref(k, v) { try { localStorage.setItem(k, String(v)); } catch (e) {} }
+async function doExportParts(partIds, label, withKey, opts) {
+  opts = opts || {};
+  var useGzip = opts.gzip !== undefined ? !!opts.gzip : (canGzip() && bkPref('mp-bk-gz', '1') !== '0');
+  var mediaDays = opts.mediaDays !== undefined ? Number(opts.mediaDays) : Number(bkPref('mp-bk-mdays', '0'));
   toast('正在导出…');
   try {
-    var r = await exportBlob(partIds, withKey, function (n) { toast('正在导出：' + n); });
-    await downloadBlob('myphone-' + label + '-' + stamp() + '.json', r.blob);
+    var r = await exportBlob(partIds, withKey, function (n) { toast('正在导出：' + n); }, { mediaDays: mediaDays });
+    var rawSize = r.blob.size, outBlob = r.blob, gzUsed = false;
+    if (useGzip && canGzip()) {
+      toast('正在压缩…');
+      var gr = await gzipBlob(r.blob);
+      outBlob = gr.blob; gzUsed = gr.gz;
+    }
+    var ext = gzUsed ? '.json.gz' : '.json';
+    var tag = mediaDays > 0 ? ('-' + mediaDays + 'd') : (mediaDays < 0 ? '-lite' : '');
+    await downloadBlob('myphone-' + label + tag + '-' + stamp() + ext, outBlob);
     try { localStorage.setItem('mp-last-export', String(Date.now())); } catch (e) {}
-    /* 没有数据表的分区（API 设置、其它设置）单独列出：导出了几项设置；选了「不含 API Key」时明确写出没导 */
     var extra = [];
+    if (gzUsed) extra.push('压缩：' + fmtMB(rawSize) + ' → ' + fmtMB(outBlob.size) + '（省 ' + Math.max(0, Math.round((1 - outBlob.size / (rawSize || 1)) * 100)) + '%，无损）');
+    if (r.omitted && (r.omitted.img || r.omitted.aud)) {
+      extra.push('本次导出已精简旧媒体：图片 ' + r.omitted.img + ' 张、语音 ' + r.omitted.aud + ' 条（文字与本地原文件未动）');
+    }
     partIds.map(partOf).filter(function (p) { return p && !p.stores.length; }).forEach(function (p) {
       if (p.secret && !withKey) extra.push(p.name + '：未导出（你选的是「不含 API Key」）');
       else extra.push(p.name + '：' + (r.settingCounts[p.id] ? r.settingCounts[p.id] + ' 项设置' : '没有可导出的设置（可能还没填写）'));
     });
     if (label === 'full-nokey') extra.unshift('API 设置：未导出（你点的是「不含 API Key」）');
-    showReport('已导出 ' + (r.blob.size / 1048576).toFixed(1) + 'MB', [countsText(r.counts)].concat(extra).filter(Boolean).join('\n')); refreshBackupPage();
+    showReport('已导出 ' + fmtMB(outBlob.size), [countsText(r.counts)].concat(extra).filter(Boolean).join('\n')); refreshBackupPage();
   } catch (e) { toast('导出失败：' + e.message); }
 }
 
@@ -5213,7 +5332,34 @@ async function applyImport(data, partIds, replaceMode) {
 async function streamBackup(file, cb, onProgress, chunkSize) {
   var CH = chunkSize || 4 * 1024 * 1024, dec = new TextDecoder('utf-8'), off = 0, text = '', p = 0;
   var TRUNC = '文件不完整（可能没下载完，或中途被截断）';
+  var gz = await isGzipFile(file), gzReader = null, gzDone = false;
+  if (gz) {
+    if (typeof DecompressionStream === 'undefined') throw new Error('当前浏览器不支持读取 .gz 压缩备份，请升级或换 Chrome');
+    var totalSz = file.size || 1, readRaw = 0;
+    var srcStream = new ReadableStream({
+      pull: async function (ctrl) {
+        if (readRaw >= file.size) { ctrl.close(); return; }
+        var buf = await file.slice(readRaw, readRaw + CH).arrayBuffer();
+        readRaw += buf.byteLength;
+        if (onProgress) onProgress(Math.min(1, readRaw / totalSz));
+        ctrl.enqueue(new Uint8Array(buf));
+      }
+    });
+    gzReader = srcStream.pipeThrough(new DecompressionStream('gzip')).getReader();
+  }
   async function fill() {
+    if (gz) {
+      if (gzDone) return false;
+      var got = '';
+      while (got.length < 262144) {
+        var rd = await gzReader.read();
+        if (rd.done) { gzDone = true; got += dec.decode(); break; }
+        got += dec.decode(rd.value, { stream: true });
+      }
+      if (!got) return false;
+      text += got;
+      return true;
+    }
     if (off >= file.size) return false;
     var buf = await file.slice(off, off + CH).arrayBuffer();
     off += buf.byteLength;
@@ -5445,9 +5591,25 @@ function importReportText(ids, r) {
   return t || '完成';
 }
 
+async function peekHeadText(f) {
+  if (await isGzipFile(f)) {
+    if (typeof DecompressionStream === 'undefined') throw new Error('当前浏览器不支持读取 .gz 压缩备份');
+    var reader = f.stream().pipeThrough(new DecompressionStream('gzip')).getReader();
+    var dec = new TextDecoder('utf-8'), out = '';
+    try {
+      while (out.length < 4096) {
+        var r = await reader.read();
+        if (r.done) break;
+        out += dec.decode(r.value, { stream: true });
+      }
+    } finally { try { await reader.cancel(); } catch (e) {} }
+    return out;
+  }
+  return new TextDecoder().decode(await f.slice(0, 4096).arrayBuffer());
+}
 async function loadImportFile(f, onlyParts) {
   var head = '';
-  try { head = new TextDecoder().decode(await f.slice(0, 4096).arrayBuffer()); } catch (e) {}
+  try { head = await peekHeadText(f); } catch (e) { showReport('读取失败', e.message); return; }
   if (/"format"\s*:\s*"myphone-v1"/.test(head)) return loadImportStream(f, onlyParts);
   return loadImportLegacy(f, onlyParts);
 }
@@ -5470,7 +5632,7 @@ async function loadImportStream(f, onlyParts) {
 /* EPhone 旧备份等其它格式：需要整份读进内存转换（这类文件通常不大） */
 async function loadImportLegacy(f, onlyParts) {
   var data;
-  try { toast('正在读取文件…'); data = JSON.parse((await f.text()).replace(/^﻿/, '')); }
+  try { toast('正在读取文件…'); var rawL = (await isGzipFile(f)) ? await gunzipToText(f) : await f.text(); data = JSON.parse(rawL.replace(/^\uFEFF/, '')); }
   catch (e) { toast('文件不是有效的 JSON（或太大，手机内存不够）'); return; }
   var det = detectFile(data); if (!det) { toast('不认识这个文件：不是 myphone-v1，也不是 EPhone 备份'); return; }
   var rep = null;
@@ -5488,7 +5650,7 @@ async function loadImportLegacy(f, onlyParts) {
 }
 
 var importOnly = null;
-function startImport(onlyParts) { importOnly = onlyParts || null; $('file-import').click(); }
+function startImport(onlyParts) { importOnly = onlyParts || null; var fi = $('file-import'); fi.setAttribute('accept', '.json,.gz,application/json,application/gzip'); fi.click(); }
 $('file-import').addEventListener('change', function () { var f = this.files[0]; this.value = ''; if (f) loadImportFile(f, importOnly); });
 
 /* ---------- 应急备份：页面隐藏/关闭时自动把全部数据存一份到浏览器的缓存仓库；数据库被清空/损坏时可一键恢复 ---------- */
@@ -5502,12 +5664,13 @@ async function emergencyBackup(force) {
   if (!force && (!emgEnabled() || !dbDirty)) return false;
   emgBusy = true;
   try {
-    var all = PARTS.map(function (p) { return p.id; }), r = await exportBlob(all, true), blob = r.blob;
+    var all = PARTS.map(function (p) { return p.id; }), r = await exportBlob(all, true), blob = r.blob, gz = false;
     var n = { chars: r.counts.characters || 0, msgs: r.counts.messages || 0 };
     if (!force && !n.chars && !n.msgs) return false;                  /* 空库不覆盖已有的应急备份 */
+    if (canGzip()) { try { var gr = await gzipBlob(blob); blob = gr.blob; gz = gr.gz; } catch (e) {} }
     var meta = emgMeta() || {}, slot = meta.slot === 'a' ? 'b' : 'a', cache = await caches.open(EMG_CACHE);
     await cache.put('/__emg/' + slot + '.json', new Response(blob));  /* 交替写两份：写到一半断了，上一份仍完好 */
-    localStorage.setItem(EMG_META, JSON.stringify({ slot: slot, ts: Date.now(), size: blob.size, chars: n.chars, msgs: n.msgs }));
+    localStorage.setItem(EMG_META, JSON.stringify({ slot: slot, ts: Date.now(), size: blob.size, gz: gz, chars: n.chars, msgs: n.msgs }));
     dbDirty = false; return true;
   } catch (e) { return false; } finally { emgBusy = false; }
 }
@@ -5541,6 +5704,148 @@ async function restoreEmergency() {
   } catch (e) { toast('恢复失败：' + e.message); }
 }
 
+/* ---------- 空间占用体检 & 本地旧媒体清理 ---------- */
+async function calcStorageReport(onStep) {
+  var st = {
+    msgImg: { name: '聊天图片', bytes: 0, n: 0 },
+    msgAud: { name: '我的语音录音', bytes: 0, n: 0 },
+    msgTxt: { name: '聊天文字（含 AI 语音文字）', bytes: 0, n: 0 },
+    moments: { name: '朋友圈（含配图）', bytes: 0, n: 0 },
+    charBg: { name: '角色头像与聊天背景', bytes: 0, n: 0 },
+    beauty: { name: '美化（壁纸 / 字体 / 提示音 / 预设）', bytes: 0, n: 0 },
+    stk: { name: '表情包', bytes: 0, n: 0 },
+    other: { name: '世界书 / 记忆 / 心声 / 歌单 / 其它', bytes: 0, n: 0 }
+  };
+  function scanStore(name, fn) {
+    return new Promise(function (res, rej) {
+      var req = db.transaction(name).objectStore(name).openCursor();
+      req.onsuccess = function () {
+        var c = req.result; if (!c) return res();
+        try { fn(c.value); } catch (e) {}
+        c.continue();
+      };
+      req.onerror = function () { rej(req.error); };
+    });
+  }
+  if (onStep) onStep('聊天记录');
+  await scanStore('messages', function (m) {
+    var len = JSON.stringify(m).length;
+    if (m.type === 'image' && m.content && /^data:/.test(m.content)) {
+      var il = m.content.length; st.msgImg.bytes += il; st.msgImg.n++; st.msgTxt.bytes += Math.max(0, len - il);
+    } else if (m.type === 'voice' && m.meta && m.meta.audio && /^data:/.test(m.meta.audio)) {
+      var al = m.meta.audio.length; st.msgAud.bytes += al; st.msgAud.n++; st.msgTxt.bytes += Math.max(0, len - al);
+    } else {
+      st.msgTxt.bytes += len; st.msgTxt.n++;
+    }
+  });
+  if (onStep) onStep('朋友圈 / 角色 / 表情包');
+  await scanStore('moments', function (m) { st.moments.bytes += JSON.stringify(m).length; st.moments.n++; });
+  await scanStore('characters', function (c) {
+    var total = JSON.stringify(c).length;
+    var med = (c.chatBg && /^data:/.test(c.chatBg) ? c.chatBg.length : 0) + (c.avatar && /^data:/.test(c.avatar) ? c.avatar.length : 0) + (c.userAvatar && /^data:/.test(c.userAvatar) ? c.userAvatar.length : 0);
+    st.charBg.bytes += med; if (med) st.charBg.n++;
+    st.other.bytes += Math.max(0, total - med);
+  });
+  await scanStore('stickers', function (s) { st.stk.bytes += JSON.stringify(s).length; st.stk.n++; });
+  if (onStep) onStep('美化与预设');
+  await scanStore('beautyPresets', function (p) { st.beauty.bytes += JSON.stringify(p).length; st.beauty.n++; });
+  await scanStore('miniPresets', function (p) { st.beauty.bytes += JSON.stringify(p).length; st.beauty.n++; });
+  if (homeBgFile) { st.beauty.bytes += homeBgFile.length; st.beauty.n++; }
+  if (notifyFile) { st.beauty.bytes += notifyFile.length; st.beauty.n++; }
+  if (settings.fontData) { st.beauty.bytes += settings.fontData.length; st.beauty.n++; }
+  if (settings.iconUrls) st.beauty.bytes += JSON.stringify(settings.iconUrls).length;
+  var restStores = ['worldBooks', 'worldBookCategories', 'memories', 'thoughts', 'offlinePresets', 'playlists', 'userPersonas', 'stickerCategories'];
+  for (var i = 0; i < restStores.length; i++) {
+    await scanStore(restStores[i], function (v) { st.other.bytes += JSON.stringify(v).length; st.other.n++; });
+  }
+  var list = Object.keys(st).map(function (k) { return st[k]; }).sort(function (a, b) { return b.bytes - a.bytes; });
+  var total = list.reduce(function (n, x) { return n + x.bytes; }, 0);
+  return { total: total, list: list };
+}
+async function previewPruneMedia(days, opt) {
+  var cutoff = Date.now() - days * 86400000, imgN = 0, audN = 0, bytes = 0;
+  await new Promise(function (res, rej) {
+    var req = db.transaction('messages').objectStore('messages').openCursor();
+    req.onsuccess = function () {
+      var c = req.result; if (!c) return res();
+      var m = c.value;
+      if ((m.ts || 0) < cutoff) {
+        if (opt.img && m.type === 'image' && m.content && /^data:/.test(m.content)) { imgN++; bytes += m.content.length; }
+        if (opt.aud && m.type === 'voice' && m.meta && m.meta.audio && /^data:/.test(m.meta.audio)) { audN++; bytes += m.meta.audio.length; }
+      }
+      c.continue();
+    };
+    req.onerror = function () { rej(req.error); };
+  });
+  return { imgN: imgN, audN: audN, bytes: bytes };
+}
+async function runPruneMedia(days, opt) {
+  var cutoff = Date.now() - days * 86400000, imgN = 0, audN = 0, batch = [];
+  await new Promise(function (res, rej) {
+    var req = db.transaction('messages').objectStore('messages').openCursor();
+    req.onsuccess = function () {
+      var c = req.result; if (!c) return res();
+      var m = c.value;
+      if ((m.ts || 0) < cutoff) {
+        if (opt.img && m.type === 'image' && m.content && /^data:/.test(m.content)) {
+          batch.push(stripMsgMedia(m, { img: true, aud: false })); imgN++;
+        } else if (opt.aud && m.type === 'voice' && m.meta && m.meta.audio && /^data:/.test(m.meta.audio)) {
+          batch.push(stripMsgMedia(m, { img: false, aud: true })); audN++;
+        }
+      }
+      c.continue();
+    };
+    req.onerror = function () { rej(req.error); };
+  });
+  for (var i = 0; i < batch.length; i += 500) await dbBulkPut('messages', batch.slice(i, i + 500));
+  markDirty2();
+  return { imgN: imgN, audN: audN };
+}
+function openPruneSheet() {
+  var dSel = h('select', {},
+    h('option', { value: '15', text: '清理 15 天前的旧媒体' }),
+    h('option', { value: '30', text: '清理 30 天前的旧媒体' }),
+    h('option', { value: '7', text: '清理 7 天前的旧媒体' }),
+    h('option', { value: '60', text: '清理 60 天前的旧媒体' }));
+  dSel.value = '30';
+  var cbImg = h('input', { type: 'checkbox' }); cbImg.checked = true;
+  var cbAud = h('input', { type: 'checkbox' }); cbAud.checked = true;
+  var prevEl = h('div', { class: 'hint', style: 'margin:8px 0;color:var(--sub)', text: '正在统计…' });
+  var okBtn = h('button', { class: 'btn danger', text: '确认清理', disabled: true });
+  async function upd() {
+    okBtn.disabled = true; prevEl.textContent = '正在统计…';
+    if (!cbImg.checked && !cbAud.checked) { prevEl.textContent = '请至少勾选一项'; return; }
+    var r = await previewPruneMedia(Number(dSel.value), { img: cbImg.checked, aud: cbAud.checked });
+    if (!r.imgN && !r.audN) { prevEl.textContent = '没有符合条件的旧媒体可清理。'; return; }
+    prevEl.textContent = '预计清理：图片 ' + r.imgN + ' 张、语音录音 ' + r.audN + ' 条，可释放约 ' + fmtMB(r.bytes) + '。\n文字记录、语音转写文字和 AI 记忆会完整保留。';
+    prevEl.style.whiteSpace = 'pre-line';
+    okBtn.disabled = false;
+  }
+  dSel.onchange = cbImg.onchange = cbAud.onchange = upd;
+  okBtn.onclick = function () {
+    var days = Number(dSel.value), opt = { img: cbImg.checked, aud: cbAud.checked };
+    confirmSheet('确认清理 ' + days + ' 天前的本地媒体？\n此操作不可撤销（建议先导出一份完整备份）。文字与记忆不受影响。', '确认清理', async function () {
+      toast('正在清理…');
+      try {
+        var r = await runPruneMedia(days, opt);
+        if (cur && s_chatActive()) reloadChat();
+        showReport('清理完成', '已清理本地旧图片 ' + r.imgN + ' 张、旧语音音频 ' + r.audN + ' 条。\n文字和记忆均完好保留。');
+        refreshBackupPage();
+      } catch (e) { toast('清理失败：' + e.message); }
+    }, true);
+  };
+  openSheet([
+    h('h3', { text: '清理本地过期语音 / 图片' }),
+    h('div', { class: 'hint', text: '只删除聊天里超过指定天数的图片与你发的语音音频流，保留文字记录与转写内容。AI 语音本身只存文字，不占备份体积。' }),
+    field('清理范围', dSel),
+    h('label', { class: 'imp-row' }, cbAud, h('span', { class: 'imp-n', text: '我发的语音录音（保留转写文字）' })),
+    h('label', { class: 'imp-row' }, cbImg, h('span', { class: 'imp-n', text: '聊天图片（保留已过期占位）' })),
+    prevEl,
+    h('div', { class: 'btn-row' }, okBtn, h('button', { class: 'btn', text: '取消', onclick: closeSheet }))
+  ]);
+  upd();
+}
+
 /* ---------- 数据备份全屏页 ---------- */
 function refreshBackupPage() { if ($('s-backup') && $('s-backup').classList.contains('active')) renderBackupPage(); }
 async function renderBackupPage() {
@@ -5553,30 +5858,70 @@ async function renderBackupPage() {
     grid.appendChild(h('label', { class: 'imp-row' }, cb, h('span', { class: 'imp-n', text: p.name }), h('span', { class: 'imp-c', text: p.stores.length ? counts[p.id] + ' 项' : '设置' })));
   });
   function picked() { return PARTS.filter(function (p) { return checked[p.id].checked; }).map(function (p) { return p.id; }); }
+
+  /* 0 导出优化选项（压缩 + 导出时仅保留近 N 天媒体） */
+  var gzOn = canGzip() && bkPref('mp-bk-gz', '1') !== '0';
+  var gzSw = switchEl(gzOn, function (v) { bkSetPref('mp-bk-gz', v ? '1' : '0'); });
+  var mdSel = h('select', {},
+    h('option', { value: '0', text: '全部保留（完整备份）' }),
+    h('option', { value: '30', text: '仅打包最近 30 天的聊天图片和语音' }),
+    h('option', { value: '15', text: '仅打包最近 15 天的聊天图片和语音' }),
+    h('option', { value: '-1', text: '极速轻量：不打包聊天图片和语音（只留文字）' }));
+  mdSel.value = bkPref('mp-bk-mdays', '0');
+  mdSel.onchange = function () { bkSetPref('mp-bk-mdays', mdSel.value); };
+
   /* 1 完整备份 */
   body.appendChild(h('div', { class: 'glass' }, h('h4', { text: '完整备份' }),
     h('div', { class: 'bt-hint', text: days == null ? '还没有导出过备份文件。' : (days === 0 ? '今天已导出过备份文件。' : '上次导出备份文件是 ' + days + ' 天前。') + (days >= 7 ? ' 建议再导出一份。' : '') }),
+    canGzip() ? h('div', { class: 'field inline' }, h('div', {}, h('label', { text: '无损压缩导出（.json.gz）' }), h('div', { class: 'hint', text: '流式压缩，不损任何数据，体积更小且不容易崩；导入时自动识别新旧格式' })), gzSw.el) : null,
+    field('导出时的旧媒体策略（不改动手机本地数据）', mdSel, '选「仅打包最近 15/30 天」时，日常备份很小很快，手机里原图和录音依然完好'),
     h('div', { class: 'btn-row' },
       h('button', { class: 'btn primary', text: '导出全部（含 API Key）', onclick: function () { doExportParts(PARTS.map(function (p) { return p.id; }), 'full', true); } }),
       h('button', { class: 'btn', text: '导出全部（不含 API Key）', onclick: function () { doExportParts(PARTS.filter(function (p) { return !p.secret; }).map(function (p) { return p.id; }), 'full-nokey', false); } })),
-    h('div', { class: 'btn-row' }, h('button', { class: 'btn', text: '导入备份文件（自动识别格式）', onclick: function () { startImport(null); } })),
-    h('div', { class: 'bt-hint', text: '支持本小手机导出的 myphone-v1 文件，也支持 EPhone 旧小手机的备份（会自动转换）。导入时可以勾选只导入哪些分区。' })));
-  /* 2 分区 */
+    h('div', { class: 'btn-row' }, h('button', { class: 'btn', text: '导入备份文件（自动识别 .json / .json.gz）', onclick: function () { startImport(null); } })),
+    h('div', { class: 'bt-hint', text: '支持本小手机导出的 myphone-v1（含压缩版 .json.gz），也支持 EPhone 旧小手机的备份。导入时可勾选分区。' })));
+
+  /* 2 体积体检与旧媒体清理 */
+  var diagBox = h('div', { class: 'bt-hint', text: '点下方「空间占用体检」查看图片、语音、美化预设、字体等各占多少 MB。' });
+  body.appendChild(h('div', { class: 'glass' }, h('h4', { text: '体积体检与瘦身' }), diagBox,
+    h('div', { class: 'btn-row' },
+      h('button', { class: 'btn primary', text: '空间占用体检', onclick: async function () {
+        diagBox.textContent = '正在扫描数据库…';
+        try {
+          var rep = await calcStorageReport(function (s) { diagBox.textContent = '正在扫描：' + s + '…'; });
+          diagBox.innerHTML = '';
+          diagBox.appendChild(h('div', { style: 'font-weight:600;margin-bottom:6px;color:var(--ink)', text: '当前数据总计约 ' + fmtMB(rep.total) + '（未压缩 JSON 估算）' }));
+          rep.list.forEach(function (it) {
+            if (!it.bytes) return;
+            var pct = rep.total ? Math.round(it.bytes / rep.total * 100) : 0;
+            diagBox.appendChild(h('div', { style: 'margin:5px 0' },
+              h('div', { style: 'display:flex;justify-content:space-between;font-size:12.5px' },
+                h('span', { text: it.name + (it.n ? '（' + it.n + ' 项）' : '') }),
+                h('span', { style: 'color:var(--sub)', text: fmtMB(it.bytes) + ' · ' + pct + '%' })),
+              h('div', { style: 'height:5px;border-radius:3px;background:var(--accent);opacity:.75;width:' + Math.max(2, pct) + '%' })));
+          });
+        } catch (e) { diagBox.textContent = '体检失败：' + e.message; }
+      } }),
+      h('button', { class: 'btn danger', text: '清理本地旧语音 / 图片…', onclick: openPruneSheet })),
+    h('div', { class: 'bt-hint', text: '提示：如果「美化」占比很高，通常是因为上传了大字体/原图壁纸，或多个美化预设里重复存了它们。' })));
+
+  /* 3 分区 */
   body.appendChild(h('div', { class: 'glass' }, h('h4', { text: '按分区导出 / 导入' }), grid,
     h('div', { class: 'btn-row' },
       h('button', { class: 'btn primary', text: '导出所选分区', onclick: function () { var ids = picked(); if (!ids.length) { toast('至少勾一项'); return; } doExportParts(ids, 'part', ids.indexOf('api') >= 0); } }),
       h('button', { class: 'btn', text: '导入所选分区…', onclick: function () { var ids = picked(); if (!ids.length) { toast('至少勾一项'); return; } startImport(ids); } })),
     h('div', { class: 'bt-hint', text: 'API 设置里有 Key，导出时默认不勾，需要的话自己勾上并保管好文件。' })));
-  /* 3 应急 */
+
+  /* 4 应急 */
   var emgBox = h('div', { class: 'glass' }, h('h4', { text: '应急备份（防网页崩溃 / 数据被清）' }));
   var sw = switchEl(emgEnabled(), function (v) { try { localStorage.setItem(EMG_ON_KEY, v ? '1' : '0'); } catch (e) {} });
   emgBox.appendChild(h('div', { class: 'field inline' }, h('label', { text: '自动应急备份' }), sw.el));
-  emgBox.appendChild(h('div', { class: 'bt-hint', text: m ? '最近一份：' + new Date(m.ts).toLocaleString() + '，' + m.chars + ' 个角色 / ' + m.msgs + ' 条消息 / ' + (m.size / 1048576).toFixed(1) + 'MB' : '还没有应急备份。' }));
+  emgBox.appendChild(h('div', { class: 'bt-hint', text: m ? '最近一份：' + new Date(m.ts).toLocaleString() + '，' + m.chars + ' 个角色 / ' + m.msgs + ' 条消息 / ' + fmtMB(m.size) + (m.gz ? '（已压缩）' : '') : '还没有应急备份。' }));
   emgBox.appendChild(h('div', { class: 'btn-row' },
     h('button', { class: 'btn', text: '立即备份一次', onclick: async function () { toast('备份中…'); var ok = await emergencyBackup(true); toast(ok ? '已备份' : '备份失败（浏览器不支持或空间不足）'); renderBackupPage(); } }),
     h('button', { class: 'btn', text: '从应急备份恢复', onclick: function () { if (!m) { toast('还没有应急备份'); return; } confirmSheet('用应急备份覆盖现在的全部数据？', '恢复', restoreEmergency, true); } }),
-    h('button', { class: 'btn', text: '下载应急备份文件', onclick: async function () { var b = await emergencyBlob(); if (!b) { toast('没有应急备份'); return; } try { await downloadBlob('myphone-emergency-' + stamp() + '.json', b); } catch (e) { toast('下载失败：' + e.message); } } })));
-  emgBox.appendChild(h('div', { class: 'bt-hint', text: '原理：每次你切走/关闭网页（以及每隔约 10 分钟）且数据有变化时，自动把全部数据存一份到浏览器的缓存仓库，交替写两份，写坏一份还有上一份。下次打开如果发现数据库是空的，会提示一键恢复。\n限制：这份备份和网页数据在同一个浏览器里，如果你手动「清除网站数据」或卸载浏览器，它也会一起没。所以请隔一阵导出一份备份文件，存到手机文件/网盘里。' }));
+    h('button', { class: 'btn', text: '下载应急备份文件', onclick: async function () { var b = await emergencyBlob(); if (!b) { toast('没有应急备份'); return; } var gz = await isGzipFile(b); try { await downloadBlob('myphone-emergency-' + stamp() + (gz ? '.json.gz' : '.json'), b); } catch (e) { toast('下载失败：' + e.message); } } })));
+  emgBox.appendChild(h('div', { class: 'bt-hint', text: '原理：每次你切走/关闭网页（以及每隔约 10 分钟）且数据有变化时，自动把全部数据压缩存一份到浏览器的缓存仓库，交替写两份，写坏一份还有上一份。下次打开如果发现数据库是空的，会提示一键恢复。\n限制：这份备份和网页数据在同一个浏览器里，如果你手动「清除网站数据」或卸载浏览器，它也会一起没。所以请隔一阵导出一份备份文件，存到手机文件/网盘里。' }));
   body.appendChild(emgBox);
 }
 onShow['s-backup'] = renderBackupPage;
